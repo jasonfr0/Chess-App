@@ -13,3 +13,5 @@ export interface PlayedMove { san: string; uci: string; fenBefore: string; fenAf
 
 export interface EngineLine { uci: string[]; cp: number | null; mate: number | null } // side-to-move POV
 export interface Analysis { fen: string; depth: number; lines: EngineLine[] }           // lines[0] = best
+
+export interface ProfileSummary { topThemes: { theme: Theme; count: number }[]; gamesPlayed: number }
