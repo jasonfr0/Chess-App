@@ -2,7 +2,7 @@ export type Color = 'w' | 'b';
 export type Area = 'opening' | 'middlegame' | 'endgame';
 export type CoachLevel = 'full' | 'guided' | 'light' | 'solo';
 export type Theme =
-  | 'hanging_piece' | 'ignored_threat' | 'missed_fork' | 'missed_pin'
+  | 'hanging_piece' | 'ignored_threat' | 'allowed_fork' | 'missed_fork' | 'missed_pin'
   | 'missed_mate' | 'allowed_mate' | 'early_queen' | 'undeveloped' | 'king_safety'
   | 'bad_trade' | 'endgame_technique' | 'other';
 export type GameResult = {

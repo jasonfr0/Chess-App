@@ -109,10 +109,34 @@ describe('classifyMove severity and flagging', () => {
       const v = run({ ...BACK_RANK, level });
       expect(v.severity).toBe('blunder');
       expect(v.theme).toBe('allowed_mate');
-      expect(v.recommendation).toBe('take_back');
       expect(v.cpLoss).toBe(2000);
       expect(v.flagged).toBe(level !== 'solo');
+      expect(v.recommendation).toBe(level === 'solo' ? 'play_on' : 'take_back');
     }
+  });
+
+  it('unflagged verdicts always recommend play_on', () => {
+    const v = run({ ...KNIGHT_EN_PRISE, inBook: true });
+    expect(v.severity).toBe('blunder');
+    expect(v.flagged).toBe(false);
+    expect(v.recommendation).toBe('play_on');
+  });
+
+  it("the engine's own best move is ok even when the after-search disagrees", () => {
+    const v = run({ ...KNIGHT_EN_PRISE, best: line(['f3e5'], 300) });
+    expect(v).toMatchObject({ severity: 'ok', cpLoss: 0, flagged: false, theme: 'other', recommendation: 'play_on' });
+  });
+
+  it('a move matching another engine line within 60cp of best is ok', () => {
+    const move = play(START, 'd2d4');
+    const base = {
+      fenBefore: START, move, after: analysis(move.fenAfter, [line(['d7d5'], 400)]),
+      history: [], level: 'full' as CoachLevel, plyCount: 0, inBook: false,
+    };
+    const near = classifyMove({ ...base, before: analysis(START, [line(['e2e4'], 40), line(['d2d4'], -10)]) });
+    expect(near).toMatchObject({ severity: 'ok', cpLoss: 0, flagged: false });
+    const far = classifyMove({ ...base, before: analysis(START, [line(['e2e4'], 40), line(['d2d4'], -30)]) });
+    expect(far.flagged).toBe(true);
   });
 
   it('eval before +900 and cpLoss 200 is not flagged', () => {
@@ -212,6 +236,30 @@ describe('classifyMove themes', () => {
     expect(v.recommendation).toBe('take_back');
   });
 
+  it('an equal trade (Bxc6 dxc6) is not hanging_piece', () => {
+    const v = run({
+      fenBefore: 'r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4', uci: 'b5c6',
+      best: line(['e1g1'], 60), reply: line(['d7c6', 'e1g1'], 100), plyCount: 6,
+    });
+    expect(v.cpLoss).toBe(160);
+    expect(v.theme).not.toBe('hanging_piece');
+    expect(v.theme).toBe('other');
+    expect(v.recommendation).toBe('play_on');
+  });
+
+  it('hanging_piece needs the engine line to actually win the piece', () => {
+    const v = run({ ...KNIGHT_EN_PRISE, reply: line(['e8e7'], 10) });
+    expect(v.theme).not.toBe('hanging_piece');
+  });
+
+  it('ignored_threat needs the engine line to actually win the piece', () => {
+    const v = run({
+      fenBefore: '4k3/8/3p4/4N3/8/8/8/4K3 w - - 0 1', uci: 'e1e2',
+      best: line(['e5c6'], 300), reply: line(['e8e7'], 0),
+    });
+    expect(v.theme).not.toBe('ignored_threat');
+  });
+
   it('missed_fork when the best move is a knight fork', () => {
     const v = run({
       fenBefore: 'r3k3/8/8/1N6/8/8/8/4K3 w - - 0 1', uci: 'e1e2',
@@ -231,6 +279,23 @@ describe('classifyMove themes', () => {
     expect(v.recommendation).toBe('play_on');
   });
 
+  it('no missed_pin when the best move only pins a pawn', () => {
+    const v = run({
+      fenBefore: '4k3/8/2p5/8/8/8/8/4KB2 w - - 0 1', uci: 'e1e2',
+      best: line(['f1b5'], 200), reply: line(['e8e7'], 0),
+    });
+    expect(v.theme).toBe('endgame_technique');
+  });
+
+  it('no missed_pin when the new pin comes from a piece other than the moved one', () => {
+    // Bd2 uncovers Re1 pinning the e5 knight to the e8 king.
+    const v = run({
+      fenBefore: '4k3/8/8/4n3/8/8/4B3/4R1K1 w - - 0 1', uci: 'g1h1',
+      best: line(['e2d3'], 200), reply: line(['e8d7'], 0), plyCount: 40,
+    });
+    expect(v.theme).not.toBe('missed_pin');
+  });
+
   it('a new early queen move is flagged at cpLoss 80 with theme early_queen', () => {
     const h = history(['e4', 'e5']);
     const fen = h[1].fenAfter;
@@ -247,14 +312,31 @@ describe('classifyMove themes', () => {
     expect(v.flagged).toBe(false);
   });
 
-  it('bad_trade when the refutation wins material without a hanging piece', () => {
+  it('allowed_fork when the refutation starts with a fork that wins material', () => {
     // Rh2?? allows ...Nf3+ forking king and rook.
     const v = run({
       fenBefore: '4k3/8/8/8/3n4/8/8/4K2R w - - 0 1', uci: 'h1h2',
       best: line(['e1d2'], 200), reply: line(['d4f3', 'e1e2', 'f3h2'], 300),
     });
-    expect(v.theme).toBe('bad_trade');
+    expect(v.theme).toBe('allowed_fork');
     expect(v.severity).toBe('blunder');
+  });
+
+  it('bad_trade when a multi-ply exchange loses material without a hanging piece or fork', () => {
+    // Rxd5? into doubled black rooks: ...Rxd5 Rxd5 Rxd5 loses a rook for a pawn.
+    const v = run({
+      fenBefore: '3r2k1/3r4/8/3p4/8/8/3R4/3R2K1 w - - 0 1', uci: 'd2d5',
+      best: line(['g1f1'], 0), reply: line(['d7d5', 'd1d5', 'd8d5'], 400),
+    });
+    expect(v.theme).toBe('bad_trade');
+  });
+
+  it('a one-ply refutation is never bad_trade', () => {
+    const v = run({
+      fenBefore: '3r2k1/3r4/8/3p4/8/8/3R4/3R2K1 w - - 0 1', uci: 'd2d5',
+      best: line(['g1f1'], 0), reply: line(['d7d5'], 400),
+    });
+    expect(v.theme).toBe('other');
   });
 
   it('endgame_technique for a quiet endgame mistake', () => {

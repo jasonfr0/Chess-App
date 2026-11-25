@@ -1,4 +1,5 @@
 import { Chess } from 'chess.js';
+import type { Square } from 'chess.js';
 import type { Analysis, Area, CoachLevel, EngineLine, PlayedMove, Theme } from '../types';
 import { pins, positionFacts, principleViolations, uciLineToSan } from './facts';
 import type { Pin, PieceRef } from './facts';
@@ -19,7 +20,9 @@ export interface ClassifyInput {
 const MATE = 10000;
 const CP_CAP = 2000;
 const DECIDED = 800;
+const NEAR_BEST = 60;
 const NON_PAWN: Record<string, number> = { n: 3, b: 3, r: 5, q: 9 };
+const PIECE_VALUE: Record<PieceRef['piece'], number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 100 };
 
 /** opening if inBook or plyCount < 20; endgame if non-pawn material (both sides, excl. kings) ≤ 13; else middlegame */
 export function areaOf(fen: string, plyCount: number, inBook: boolean): Area {
@@ -88,6 +91,23 @@ function materialBalance(fen: string, uci: string[], mover: PlayedMove['color'])
   return mover === 'w' ? m.w - m.b : m.b - m.w;
 }
 
+/** True if, somewhere in `uci` played from `fen`, the opponent captures `piece` on its own square. */
+function lineCaptures(fen: string, uci: string[], piece: PieceRef): boolean {
+  const c = new Chess(fen);
+  for (const u of uci) {
+    const there = c.get(piece.square as Square);
+    if (!there || there.type !== piece.piece || there.color !== piece.color) return false; // it moved away
+    let m;
+    try {
+      m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
+    } catch {
+      return false;
+    }
+    if (m.color !== piece.color && m.to === piece.square && m.captured) return true;
+  }
+  return false;
+}
+
 export function classifyMove(input: ClassifyInput): Verdict {
   const { fenBefore, move, before, after, history, level, plyCount, inBook } = input;
   const area = areaOf(fenBefore, plyCount, inBook);
@@ -105,6 +125,18 @@ export function classifyMove(input: ClassifyInput): Verdict {
   const bestUci = bestLine.uci[0];
   const bestSan = uciLineToSan(fenBefore, [bestUci])[0] ?? bestUci;
   const bestEval = lineScore(bestLine);
+
+  // The engine's own choice (or a line it rates within NEAR_BEST of best) is never a mistake,
+  // even if the after-search disagrees at a different depth.
+  const engineApproved = before.lines.some(
+    (l) => l.uci[0] === move.uci && (l === bestLine || bestEval - lineScore(l) <= NEAR_BEST),
+  );
+  if (engineApproved) {
+    return {
+      flagged: false, severity: 'ok', cpLoss: 0, area, theme: 'other', recommendation: 'play_on',
+      bestUci, bestSan, refutationSan,
+    };
+  }
   const afterEval = evalAfter(after, move.fenAfter);
   const cpLoss = Math.min(CP_CAP, Math.max(0, bestEval - afterEval));
 
@@ -126,7 +158,7 @@ export function classifyMove(input: ClassifyInput): Verdict {
   else flagged = severity === 'mistake' || severity === 'blunder' || (principle !== null && cpLoss >= 60);
 
   const urgent: Theme[] = ['hanging_piece', 'ignored_threat', 'allowed_mate', 'missed_mate'];
-  const recommendation = severity === 'blunder' || urgent.includes(theme) ? 'take_back' : 'play_on';
+  const recommendation = flagged && (severity === 'blunder' || urgent.includes(theme)) ? 'take_back' : 'play_on';
 
   return { flagged, severity, cpLoss, area, theme, recommendation, bestUci, bestSan, refutationSan };
 }
@@ -141,11 +173,25 @@ function pickTheme(ctx: {
   if (allowsMate) return 'allowed_mate';
   if (missesMate) return 'missed_mate';
 
+  // Material claims must be confirmed by the engine's refutation, not just by static attack counts.
+  const materialLost = materialBalance(move.fenAfter, refutationUci, mover) < materialBalance(fenBefore, [], mover);
+  const engineWins = (p: PieceRef) => materialLost && lineCaptures(move.fenAfter, refutationUci, p);
+
   const mine = (ps: PieceRef[]) => ps.filter((p) => p.color === mover && p.piece !== 'k');
   const hangingBefore = mine(positionFacts(fenBefore).hanging);
   const hangingAfter = mine(positionFacts(move.fenAfter).hanging);
-  if (hangingAfter.some((p) => !hangingBefore.some((q) => sameSquare(p, q)))) return 'hanging_piece';
-  if (hangingBefore.some((p) => hangingAfter.some((q) => sameSquare(p, q)))) return 'ignored_threat';
+  const wasHanging = (p: PieceRef) => hangingBefore.some((q) => sameSquare(p, q));
+  if (hangingAfter.some((p) => !wasHanging(p) && engineWins(p))) return 'hanging_piece';
+  if (hangingAfter.some((p) => wasHanging(p) && engineWins(p))) return 'ignored_threat';
+
+  const firstReply = refutationUci[0];
+  const fenReply = firstReply ? fenAfterUci(move.fenAfter, firstReply) : null;
+  if (fenReply && materialLost) {
+    const dest = firstReply.slice(2, 4);
+    if (positionFacts(fenReply).forks.some((f) => f.attacker.color !== mover && f.attacker.square === dest)) {
+      return 'allowed_fork';
+    }
+  }
 
   const fenBest = bestUci !== move.uci ? fenAfterUci(fenBefore, bestUci) : null;
   if (fenBest) {
@@ -154,13 +200,16 @@ function pickTheme(ctx: {
       return 'missed_fork';
     }
     const pinsBefore = pins(fenBefore);
-    if (pins(fenBest).some((p) => p.pinner.color === mover && !pinsBefore.some((q) => samePin(p, q)))) {
+    const newPin = (p: Pin) =>
+      p.pinner.color === mover && p.pinner.square === dest && PIECE_VALUE[p.pinned.piece] >= 3 &&
+      !pinsBefore.some((q) => samePin(p, q));
+    if (pins(fenBest).some(newPin)) {
       return 'missed_pin';
     }
   }
 
   if (principle) return principle;
-  if (materialBalance(move.fenAfter, refutationUci, mover) < materialBalance(fenBefore, [], mover)) return 'bad_trade';
+  if (refutationUci.length >= 2 && materialLost) return 'bad_trade';
   if (area === 'endgame') return 'endgame_technique';
   return 'other';
 }
