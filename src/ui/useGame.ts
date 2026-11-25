@@ -4,10 +4,12 @@ import type { Verdict } from '../coach/classify';
 import type { Engine } from '../engine/engine';
 import { GameState } from '../game/gameState';
 import { adjustOpponentRating, selectOpponentMove } from '../opponent/selectMove';
-import { recordMove } from '../profile/profile';
+import { areaOf } from '../coach/classify';
+import { lookup } from '../openings/repertoire';
+import { levelFor, recordMove } from '../profile/profile';
 import { levelChangeText, reviewLevels, suggestClock } from '../profile/weaning';
 import type { Db, SavedGame, Settings } from '../storage/db';
-import type { Analysis, Color, GameResult, ProfileData } from '../types';
+import type { Analysis, CoachLevel, Color, GameResult, ProfileData } from '../types';
 
 export type CoachApi = Pick<
   Coach, 'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'hint' | 'playOn' | 'checkConsequence' | 'recap'
@@ -48,6 +50,8 @@ export interface GameView {
   recap: CoachMessage | null;
   levelNotes: string[];
   clockSuggestion: boolean;
+  /** Id of the coach message whose choices the user tapped to see (guided and below). */
+  choicesShownFor: string | null;
 }
 
 export interface GameActions {
@@ -62,6 +66,8 @@ export interface GameActions {
   resign(): void;
   newGame(): void;
   dismissClockSuggestion(): void;
+  /** Reveal the current message's choices (they are always visible at full). */
+  showChoices(): void;
 }
 
 const OPPONENT_SEARCH = { depth: 10, multipv: 5 };
@@ -71,6 +77,7 @@ const CLOCK_TICK_MS = 200;
 const INITIAL: GameView = {
   phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null,
   promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false,
+  choicesShownFor: null,
 };
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
@@ -88,6 +95,22 @@ function subscribe(coach: CoachApi, cb: (m: CoachMessage) => void): () => void {
   }
   set.add(cb);
   return () => { set.delete(cb); };
+}
+
+/** The coaching level for the position on the board (same rule the coach uses). */
+export function levelAt(game: GameState, profile: ProfileData, settings: Pick<Settings, 'levelOverride'>): CoachLevel {
+  const history = game.history();
+  const inBook = lookup(game.userColor, history.map((m) => m.san)) !== null;
+  return levelFor(profile, settings, areaOf(game.fen(), history.length, inBook));
+}
+
+/** Moves the coach is showing for this position: the visible choices plus the green best-move arrow. */
+function shownMoves(message: CoachMessage | null, visible: boolean): string[] {
+  if (!message || !visible) return [];
+  return [
+    ...(message.explanation.candidates ?? []).map((c) => c.uci.slice(0, 4)),
+    ...message.arrows.filter((a) => a.color === 'green').map((a) => a.from + a.to),
+  ];
 }
 
 /** Score of the user's last five finished games: win 1, draw 0.5. */
@@ -167,10 +190,12 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const rating = adjustOpponentRating(settings.current.opponentRating, lastFiveScore(games));
     if (rating !== settings.current.opponentRating) setSettings({ ...settings.current, opponentRating: rating });
 
+    // A manual override pins an area's level, so changes underneath it are not announced.
+    const { levelOverride } = settings.current;
     set({
       recap,
-      levelNotes: review.changes.map(levelChangeText),
-      clockSuggestion: suggestClock(review.profile) && !settings.current.clockMinutes,
+      levelNotes: review.changes.filter((c) => levelOverride[c.area] === undefined).map(levelChangeText),
+      clockSuggestion: suggestClock(review.profile, settings.current) && !settings.current.clockMinutes,
     });
   };
 
@@ -212,16 +237,17 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     runPreMove(game);
   };
 
-  const checkUserMove = async (game: GameState, move: ReturnType<GameState['play']>) => {
+  const checkUserMove = async (game: GameState, move: ReturnType<GameState['play']>, assisted: boolean) => {
     const g = gen.current;
     const ply = game.history().length - 1;
     let res: Awaited<ReturnType<CoachApi['onUserMove']>> | null = null;
     try { res = await d.current.coach.onUserMove(game, move); } catch { res = null; }
     if (g !== gen.current) return;
-    if (res) {
+    // An unanalysed verdict (engine failure) is no evidence either way: it is neither shown nor recorded.
+    if (res && res.verdict.analysed !== false) {
       meta.current.verdicts.push(res.verdict);
       setProfile(recordMove(profile.current, res.verdict, {
-        gameId: meta.current.id || 'test', ply, fen: move.fenBefore, at: Date.now(),
+        gameId: meta.current.id || 'test', ply, fen: move.fenBefore, at: Date.now(), assisted,
       }));
       save();
     }
@@ -317,11 +343,15 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
         set({ promotion: { from, to } });
         return false;
       }
+      const msg = v.coachMsg;
+      const visible = msg !== null &&
+        (levelAt(game, profile.current, settings.current) === 'full' || v.choicesShownFor === msg.id);
+      const assisted = shownMoves(msg, visible).includes(uci.slice(0, 4));
       let move;
       try { move = game.play(uci); } catch { return false; }
-      set({ phase: 'checking', coachMsg: null, consequence: null, hints: null });
+      set({ phase: 'checking', coachMsg: null, consequence: null, hints: null, choicesShownFor: null });
       save();
-      void checkUserMove(game, move);
+      void checkUserMove(game, move, assisted);
       return true;
     },
 
@@ -369,6 +399,11 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     },
 
     dismissClockSuggestion() { set({ clockSuggestion: false }); },
+
+    showChoices() {
+      const msg = view.current.coachMsg;
+      if (msg) set({ choicesShownFor: msg.id });
+    },
   };
 
   return [view.current, actions];

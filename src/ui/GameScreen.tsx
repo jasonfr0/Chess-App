@@ -1,15 +1,12 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Chessboard, type Arrow as BoardArrow } from 'react-chessboard';
-import { areaOf } from '../coach/classify';
 import type { Arrow, CoachMessage } from '../coach/coach';
-import { lookup } from '../openings/repertoire';
-import { levelFor } from '../profile/profile';
 import type { Color } from '../types';
 import { CoachPanel } from './CoachPanel';
 import { MistakeCard } from './MistakeCard';
 import { PromotionPicker } from './PromotionPicker';
 import { RecapCard } from './RecapCard';
-import { useGame, type GameDeps, type Phase } from './useGame';
+import { levelAt, useGame, type GameDeps, type Phase } from './useGame';
 
 interface Props extends GameDeps {
   /** No key, or Claude's last attempt failed. */
@@ -43,21 +40,18 @@ function boardArrows(message: CoachMessage | null, includeBest: boolean): BoardA
 export function GameScreen({ coachOffline, ...deps }: Props) {
   const [view, actions] = useGame(deps);
   const [selected, setSelected] = useState<string | null>(null);
-  const [choicesFor, setChoicesFor] = useState<string | null>(null);
   const { game, phase } = view;
   const fen = game?.fen();
   const history = game?.history() ?? [];
   const canMove = phase === 'user' && !!game?.isUserTurn() && !view.promotion;
 
-  const level = useMemo(() => {
-    if (!game) return deps.profile.levels.opening;
-    const sans = history.map((m) => m.san);
-    const area = areaOf(game.fen(), history.length, lookup(game.userColor, sans) !== null);
-    return levelFor(deps.profile, deps.settings, area);
-  }, [fen, deps.profile, deps.settings]);
+  const level = useMemo(
+    () => (game ? levelAt(game, deps.profile, deps.settings) : deps.profile.levels.opening),
+    [fen, deps.profile, deps.settings],
+  );
 
   const message = view.coachMsg;
-  const showChoices = message !== null && choicesFor === message.id;
+  const showChoices = message !== null && view.choicesShownFor === message.id;
   const arrows = view.mistake
     ? boardArrows(view.mistake, true)
     : boardArrows(message, level === 'full' || showChoices);
@@ -161,7 +155,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
           consequence={view.consequence}
           level={level}
           showChoices={showChoices}
-          onShowChoices={() => message && setChoicesFor(message.id)}
+          onShowChoices={actions.showChoices}
           offline={coachOffline}
           hints={view.hints}
           onHint={actions.nextHint}

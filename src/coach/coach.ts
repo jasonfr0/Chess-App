@@ -62,7 +62,7 @@ function stubVerdict(fenBefore: string, move: PlayedMove, plyCount: number, inBo
   try { area = areaOf(fenBefore, plyCount, inBook); } catch { /* keep the default */ }
   return {
     flagged: false, severity: 'ok', cpLoss: 0, area, theme: 'other', recommendation: 'play_on',
-    bestUci: move.uci, bestSan: move.san, refutationSan: [],
+    bestUci: move.uci, bestSan: move.san, refutationSan: [], analysed: false,
   };
 }
 

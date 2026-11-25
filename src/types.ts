@@ -21,7 +21,12 @@ export interface ThemeStat {
   lastSeen: number;
   examples: { gameId: string; ply: number; fen: string }[];
 }
-export interface MoveRecord { good: boolean; flagged: boolean; at: number }
+/**
+ * good: a strong move found on the user's own. flagged: the coach stopped the game for it (level-dependent).
+ * bad: a mistake or blunder whatever the level (missing in records saved before it existed: use `flagged`).
+ * assisted: it matched a choice or arrow the coach was showing, so it says nothing about independent play.
+ */
+export interface MoveRecord { good: boolean; flagged: boolean; bad?: boolean; assisted?: boolean; at: number }
 export interface ProfileData {
   themes: Record<Theme, ThemeStat>;
   moves: Record<Area, MoveRecord[]>;

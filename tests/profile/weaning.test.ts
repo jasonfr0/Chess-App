@@ -3,6 +3,7 @@ import { emptyProfile, recordMove } from '../../src/profile/profile';
 import { ORDER, reviewLevels, levelChangeText, suggestClock } from '../../src/profile/weaning';
 import type { Verdict } from '../../src/coach/classify';
 import type { Area, ProfileData } from '../../src/types';
+import { DEFAULT_SETTINGS } from '../../src/storage/db';
 
 const v = (area: Area, flagged = false): Verdict => ({
   flagged, severity: flagged ? 'mistake' : 'ok', cpLoss: flagged ? 200 : 0, area, theme: 'other',
@@ -79,6 +80,49 @@ describe('weaning', () => {
     expect(reviewLevels(cur).profile.levels.endgame).toBe('solo');
   });
 
+  it('solo is not a trap: 25% bad (unflagged) moves over 20 post-change records step up to light', () => {
+    let p: ProfileData = { ...emptyProfile(), levels: { ...emptyProfile().levels, middlegame: 'solo' }, levelChangedAt: { middlegame: 0 } };
+    for (let i = 0; i < 20; i++) {
+      const bad = i % 4 === 0;
+      const verdict: Verdict = { ...v('middlegame'), severity: bad ? 'blunder' : 'ok', cpLoss: bad ? 400 : 0 }; // never flagged at solo
+      p = recordMove(p, verdict, { gameId: 'g', ply: i, fen: 'f', at: i });
+    }
+    expect(p.moves.middlegame.every((m) => !m.flagged)).toBe(true);
+    expect(reviewLevels(p).profile.levels.middlegame).toBe('light');
+  });
+
+  it('old records without "bad" count as bad when flagged', () => {
+    const recs = Array.from({ length: 20 }, (_, i) => ({ good: i % 4 !== 0, flagged: i % 4 === 0, at: i }));
+    const p: ProfileData = { ...emptyProfile(), moves: { ...emptyProfile().moves, opening: recs }, levels: { ...emptyProfile().levels, opening: 'guided' } };
+    expect(reviewLevels(p).profile.levels.opening).toBe('full');
+  });
+
+  it('assisted moves do not count towards stepping down', () => {
+    let p = emptyProfile();
+    for (let i = 0; i < 60; i++) p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: i, assisted: true });
+    for (let i = 0; i < 39; i++) p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: 100 + i });
+    expect(reviewLevels(p).changes).toEqual([]);
+    p = recordMove(p, v('middlegame'), { gameId: 'g', ply: 40, fen: 'f', at: 200 });
+    expect(reviewLevels(p).profile.levels.middlegame).toBe('guided');
+  });
+
+  it('assisted moves interleaved with independent ones: only independent ones are judged', () => {
+    let p = emptyProfile();
+    for (let i = 0; i < 80; i++) {
+      p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: i, assisted: i % 2 === 0 });
+    }
+    expect(reviewLevels(p).profile.levels.middlegame).toBe('guided');
+  });
+
+  it('assisted bad moves still count towards stepping up', () => {
+    let p: ProfileData = { ...emptyProfile(), levels: { ...emptyProfile().levels, opening: 'guided' } };
+    for (let i = 0; i < 20; i++) {
+      const verdict: Verdict = { ...v('opening'), severity: i % 4 === 0 ? 'mistake' : 'ok', cpLoss: i % 4 === 0 ? 200 : 0 };
+      p = recordMove(p, verdict, { gameId: 'g', ply: i, fen: 'f', at: i, assisted: true });
+    }
+    expect(reviewLevels(p).profile.levels.opening).toBe('full');
+  });
+
   it('copy', () => {
     expect(levelChangeText({ area: 'middlegame', from: 'full', to: 'guided' })).toBe(
       "You've been spotting threats well in the middlegame. I'll stop showing your choices there — tap the coach if you want them.");
@@ -90,5 +134,11 @@ describe('weaning', () => {
     const p = emptyProfile();
     expect(suggestClock(p)).toBe(false);
     expect(suggestClock({ ...p, levels: { opening: 'guided', middlegame: 'light', endgame: 'solo' } })).toBe(true);
+  });
+
+  it('suggestClock uses the effective level, including manual overrides', () => {
+    const p: ProfileData = { ...emptyProfile(), levels: { opening: 'guided', middlegame: 'light', endgame: 'solo' } };
+    expect(suggestClock(p, { ...DEFAULT_SETTINGS, levelOverride: { opening: 'full' } })).toBe(false);
+    expect(suggestClock(emptyProfile(), { ...DEFAULT_SETTINGS, levelOverride: { opening: 'light', middlegame: 'guided' } })).toBe(true);
   });
 });

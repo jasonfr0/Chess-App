@@ -193,7 +193,21 @@ describe('Coach.onUserMove', () => {
     const { verdict, message } = await coach.onUserMove(game, move);
     expect(verdict.flagged).toBe(false);
     expect(verdict.severity).toBe('ok');
+    expect(verdict.analysed).toBe(false);
     expect(message).toBeNull();
+  });
+
+  it('marks a verdict as unanalysed when the engine returns no lines for the position before', async () => {
+    const engine = new FakeEngine({});
+    const coach = new Coach(makeDeps(engine));
+    const game = new GameState('w', KNIGHT_FEN);
+    const { verdict } = await coach.onUserMove(game, game.play('f3e5'));
+    expect(verdict.analysed).toBe(false);
+  });
+
+  it('analysed verdicts do not carry analysed: false', async () => {
+    const { result } = await knightBlunder();
+    expect(result.verdict.analysed).not.toBe(false);
   });
 
   it('makes no engine call and does not flag once the game is over', async () => {

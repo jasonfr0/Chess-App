@@ -27,6 +27,26 @@ describe('profile', () => {
     expect(p.moves.middlegame[2].flagged).toBe(true);
   });
 
+  it('records bad by severity, independent of the coach level', () => {
+    let p = emptyProfile();
+    p = recordMove(p, v({ severity: 'mistake', cpLoss: 200 }), ctx(1)); // not flagged (e.g. at solo)
+    p = recordMove(p, v({ severity: 'blunder', cpLoss: 900 }), ctx(2));
+    p = recordMove(p, v({ severity: 'inaccuracy', cpLoss: 80 }), ctx(3));
+    p = recordMove(p, v(), ctx(4));
+    expect(p.moves.middlegame.map((m) => m.bad)).toEqual([true, true, false, false]);
+    expect(p.moves.middlegame.map((m) => m.flagged)).toEqual([false, false, false, false]);
+  });
+
+  it('an assisted move is never good but can still be bad', () => {
+    let p = emptyProfile();
+    p = recordMove(p, v(), { ...ctx(1), assisted: true });
+    p = recordMove(p, v({ severity: 'blunder', cpLoss: 500 }), { ...ctx(2), assisted: true });
+    expect(p.moves.middlegame).toEqual([
+      { good: false, flagged: false, bad: false, assisted: true, at: 1000 },
+      { good: false, flagged: false, bad: true, assisted: true, at: 1000 },
+    ]);
+  });
+
   it('does not mutate its input', () => {
     const p = emptyProfile();
     recordMove(p, flaggedV('hanging_piece'), ctx(1));

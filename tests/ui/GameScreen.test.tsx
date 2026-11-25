@@ -9,7 +9,8 @@ import type { Engine } from '../../src/engine/engine';
 import type { Verdict } from '../../src/coach/classify';
 import type { CoachMessage } from '../../src/coach/coach';
 import type { Analysis } from '../../src/types';
-import { openDb, DEFAULT_SETTINGS, defaultProfile } from '../../src/storage/db';
+import { openDb, DEFAULT_SETTINGS, defaultProfile, type Settings } from '../../src/storage/db';
+import type { ProfileData } from '../../src/types';
 
 const board = vi.hoisted(() => ({ options: null as ChessboardOptions | null }));
 vi.mock('react-chessboard', () => ({
@@ -66,18 +67,39 @@ function fakeCoach(): CoachApi & { recap: ReturnType<typeof vi.fn> } {
   };
 }
 
-async function setup(startFen?: string) {
+interface SetupOpts { profile?: ProfileData; settings?: Settings; coach?: ReturnType<typeof fakeCoach> }
+
+async function setup(startFen?: string, o: SetupOpts = {}) {
   const db = await openDb(`game-screen-${n++}`);
   const engine = new FakeEngine();
-  const coach = fakeCoach();
+  const coach = o.coach ?? fakeCoach();
+  const onProfile = vi.fn((_p: ProfileData) => {});
   render(
     <GameScreen
-      db={db} engine={engine} coach={coach} profile={defaultProfile()} settings={DEFAULT_SETTINGS}
-      onProfile={() => {}} onSettings={() => {}} rng={() => 0.5} startFen={startFen} coachOffline={false}
+      db={db} engine={engine} coach={coach} profile={o.profile ?? defaultProfile()} settings={o.settings ?? DEFAULT_SETTINGS}
+      onProfile={onProfile} onSettings={() => {}} rng={() => 0.5} startFen={startFen} coachOffline={false}
     />,
   );
-  return { db, engine, coach };
+  return { db, engine, coach, onProfile };
 }
+
+/** A pre-move message offering e4 (best, with its green arrow) and Nf3. */
+const choicesMessage = (): CoachMessage => ({
+  id: 'pre-1', kind: 'pre_move', source: 'template',
+  arrows: [{ from: 'e2', to: 'e4', color: 'green' }],
+  explanation: {
+    whatHappened: 'Start in the center.',
+    candidates: [
+      { san: 'e4', uci: 'e2e4', note: 'takes the center', best: true },
+      { san: 'Nf3', uci: 'g1f3', note: 'develops your knight', best: false },
+    ],
+  },
+});
+
+const lastRecord = (onProfile: ReturnType<typeof vi.fn>) => {
+  const p = onProfile.mock.calls.at(-1)![0] as ProfileData;
+  return p.moves.opening.at(-1);
+};
 
 describe('GameScreen', () => {
   it('asks for the promotion piece and plays the chosen one', async () => {
@@ -114,5 +136,88 @@ describe('GameScreen', () => {
     expect(await screen.findByRole('region', { name: /game over/i })).toHaveTextContent('No big mistakes this game.');
     expect(coach.recap).toHaveBeenCalled();
     expect(board.options!.allowDragging).toBe(false);
+  });
+
+  it('does not record an unanalysed (engine-failure) verdict', async () => {
+    const coach = fakeCoach();
+    coach.onUserMove = vi.fn(async (_g, move) => ({
+      verdict: { flagged: false, severity: 'ok' as const, cpLoss: 0, area: 'opening' as const, theme: 'other' as const,
+        recommendation: 'play_on' as const, bestUci: move.uci, bestSan: move.san, refutationSan: [], analysed: false },
+      message: null,
+    }));
+    const { engine, onProfile } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    await waitFor(() => expect(engine.calls.some((c) => c.depth === 10)).toBe(true));
+    expect(onProfile).not.toHaveBeenCalled();
+  });
+
+  it('records a move copied from the shown choices as assisted (full level)', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => choicesMessage());
+    const { onProfile } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByText(/takes the center/);
+    drop('e2', 'e4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)).toMatchObject({ assisted: true, good: false });
+  });
+
+  it('a move that was not among the shown choices is independent', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => choicesMessage());
+    const { onProfile } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByText(/takes the center/);
+    drop('d2', 'd4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)).toMatchObject({ good: true });
+    expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+  });
+
+  it('at guided, a choice counts as assisted only once Show choices was tapped', async () => {
+    const guided: ProfileData = { ...defaultProfile(), levels: { opening: 'guided', middlegame: 'full', endgame: 'light' } };
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => choicesMessage());
+    const { onProfile } = await setup(undefined, { coach, profile: guided });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByText('Start in the center.');
+    expect(screen.queryByText(/takes the center/)).not.toBeInTheDocument();
+    drop('e2', 'e4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+  });
+
+  it('at guided, tapping Show choices then playing one marks it assisted', async () => {
+    const guided: ProfileData = { ...defaultProfile(), levels: { opening: 'guided', middlegame: 'full', endgame: 'light' } };
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => choicesMessage());
+    const { onProfile } = await setup(undefined, { coach, profile: guided });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show choices' }));
+    await screen.findByText(/takes the center/);
+    drop('g1', 'f3');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBe(true);
+  });
+
+  it('does not announce level changes or suggest the clock against manual overrides', async () => {
+    // 40 good opening moves step the opening down at the end of this game, and every area is past full...
+    const p = defaultProfile();
+    const profile: ProfileData = {
+      ...p, levels: { opening: 'full', middlegame: 'guided', endgame: 'light' },
+      moves: { ...p.moves, opening: Array.from({ length: 40 }, (_, i) => ({ good: true, flagged: false, bad: false, at: i })) },
+    };
+    // ...but the user pinned the opening to full.
+    const settings: Settings = { ...DEFAULT_SETTINGS, levelOverride: { opening: 'full' } };
+    await setup('r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', { profile, settings });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('h5', 'f7');
+    const recap = await screen.findByRole('region', { name: /game over/i });
+    await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
+    expect(recap).not.toHaveTextContent(/spotting threats/);
+    expect(recap).not.toHaveTextContent(/clock/);
   });
 });

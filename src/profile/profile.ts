@@ -12,9 +12,15 @@ export function emptyProfile(): ProfileData {
 }
 
 export function recordMove(
-  p: ProfileData, v: Verdict, ctx: { gameId: string; ply: number; fen: string; at: number },
+  p: ProfileData, v: Verdict, ctx: { gameId: string; ply: number; fen: string; at: number; assisted?: boolean },
 ): ProfileData {
-  const record: MoveRecord = { good: !v.flagged && v.cpLoss < 50, flagged: v.flagged, at: ctx.at };
+  const record: MoveRecord = {
+    good: !ctx.assisted && !v.flagged && v.cpLoss < 50,
+    flagged: v.flagged,
+    bad: v.severity === 'mistake' || v.severity === 'blunder',
+    ...(ctx.assisted ? { assisted: true } : {}),
+    at: ctx.at,
+  };
   const all = [...p.moves[v.area], record];
   const trimmed = Math.max(0, all.length - MAX_RECORDS);
   const moves = { ...p.moves, [v.area]: all.slice(trimmed) };
@@ -49,6 +55,6 @@ export function summary(p: ProfileData, now: number = Date.now(), gamesPlayed = 
   return { topThemes, gamesPlayed };
 }
 
-export function levelFor(p: ProfileData, s: Settings, a: Area): CoachLevel {
+export function levelFor(p: ProfileData, s: Pick<Settings, 'levelOverride'>, a: Area): CoachLevel {
   return s.levelOverride[a] ?? p.levels[a];
 }

@@ -83,6 +83,20 @@ describe('db', () => {
     expect((await db.listGames()).map((g) => g.id)).toEqual(['g1']);
   });
 
+  it('imports move records with and without the newer bad/assisted fields', async () => {
+    const db = await openDb(fresh());
+    const p = defaultProfile();
+    p.moves.opening = [
+      { good: true, flagged: false, at: 1 } as never, // a record saved before bad/assisted existed
+      { good: false, flagged: false, bad: true, assisted: true, at: 2 },
+    ];
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [], profile: p }));
+    expect((await db.getProfile()).moves.opening).toEqual(p.moves.opening);
+    const wrong = { ...p, moves: { ...p.moves, opening: [{ good: true, flagged: false, bad: 'yes', at: 1 }] } };
+    await expect(db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [], profile: wrong })))
+      .rejects.toBeInstanceOf(ImportError);
+  });
+
   it('rejects invalid game result and model', async () => {
     const db = await openDb(fresh());
     const g = { ...game('x'), result: { winner: 'q', reason: 'nope' } };

@@ -78,7 +78,10 @@ const themeStatSchema = z.looseObject({
   lastSeen: z.number(),
   examples: z.array(z.looseObject({ gameId: z.string(), ply: z.number(), fen: z.string() })),
 });
-const moveRecordSchema = z.looseObject({ good: z.boolean(), flagged: z.boolean(), at: z.number() });
+const moveRecordSchema = z.looseObject({
+  good: z.boolean(), flagged: z.boolean(), at: z.number(),
+  bad: z.boolean().optional(), assisted: z.boolean().optional(), // newer fields; older backups lack them
+});
 const profileSchema = z.looseObject({
   themes: z.record(z.string(), themeStatSchema),
   moves: z.looseObject({

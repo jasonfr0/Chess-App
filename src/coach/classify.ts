@@ -10,6 +10,8 @@ export interface Verdict {
   recommendation: 'take_back' | 'play_on';
   bestUci: string; bestSan: string;
   refutationSan: string[]; // engine best line after the user's move, ≤ 4 plies
+  /** false when the engine gave nothing to judge by (failure, stopped search): not evidence either way. */
+  analysed?: boolean;
 }
 
 export interface ClassifyInput {
@@ -118,7 +120,7 @@ export function classifyMove(input: ClassifyInput): Verdict {
   if (!bestLine || bestLine.uci.length === 0) {
     return {
       flagged: false, severity: 'ok', cpLoss: 0, area, theme: 'other', recommendation: 'play_on',
-      bestUci: move.uci, bestSan: move.san, refutationSan,
+      bestUci: move.uci, bestSan: move.san, refutationSan, analysed: false,
     };
   }
 
