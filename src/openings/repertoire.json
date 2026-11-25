@@ -1,0 +1,466 @@
+{
+  "white": [
+    {
+      "san": "e4",
+      "name": "King's Pawn Opening",
+      "idea": "Push your e-pawn two squares to grab the center. It also opens lines for your queen and your light-squared bishop.",
+      "children": [
+        {
+          "san": "e5",
+          "idea": "Black copies you and claims the center too. Attack the pawn on e5 by bringing your knight to f3.",
+          "children": [
+            {
+              "san": "Nf3",
+              "idea": "Your knight jumps toward the center and attacks the pawn on e5. Knights are strongest near the middle of the board.",
+              "children": [
+                {
+                  "san": "Nc6",
+                  "idea": "Black defends the pawn on e5 with a knight. Bring your bishop to c4, where it aims at f7, the weak square next to Black's king.",
+                  "children": [
+                    {
+                      "san": "Bc4",
+                      "name": "Italian Game",
+                      "idea": "Your bishop on c4 aims at f7, a square only Black's king protects. Next, get ready to castle so your king is safe.",
+                      "children": [
+                        {
+                          "san": "Bc5",
+                          "name": "Giuoco Piano",
+                          "idea": "Black's bishop copies yours and aims at your f2 square. Good plans are c3 (getting ready for d4) or castling right away.",
+                          "children": [
+                            {
+                              "san": "c3",
+                              "idea": "Your pawn on c3 gets ready to push d4 for a bigger center. It also takes the d4 square away from Black's knight.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Black's knight attacks your pawn on e4. Protect it calmly with d3, then castle.",
+                                  "children": [
+                                    {
+                                      "san": "d3",
+                                      "idea": "Your pawn on d3 protects e4 and opens a path for your dark-squared bishop. Next, castle to keep your king safe.",
+                                      "children": [],
+                                      "main": true
+                                    }
+                                  ]
+                                }
+                              ],
+                              "main": true
+                            },
+                            {
+                              "san": "O-O",
+                              "idea": "Castling tucks your king into the corner and brings your rook toward the center. Next, play c3 and d3 to build a solid center.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Black's knight attacks your pawn on e4. Protect it with d3.",
+                                  "children": [
+                                    {
+                                      "san": "d3",
+                                      "idea": "Your pawn on d3 guards e4 and frees your bishop on c1. Next, play c3 and bring your other knight out.",
+                                      "children": [],
+                                      "main": true
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "san": "Nf6",
+                          "name": "Two Knights Defense",
+                          "idea": "Black's knight attacks your pawn on e4 instead of copying your bishop. Keep it simple and protect e4 with d3.",
+                          "children": [
+                            {
+                              "san": "d3",
+                              "idea": "Your pawn on d3 guards e4 and opens the way for your bishop on c1. Next, castle and bring out your other knight.",
+                              "children": [
+                                {
+                                  "san": "Bc5",
+                                  "idea": "Black's bishop comes to c5 and aims at f2. Castle now so your king is safe.",
+                                  "children": [
+                                    {
+                                      "san": "O-O",
+                                      "idea": "Your king is safe in the corner and your rook can join the game. Next, play c3 to take d4 away from Black's pieces.",
+                                      "children": [],
+                                      "main": true
+                                    }
+                                  ]
+                                },
+                                {
+                                  "san": "Be7",
+                                  "idea": "Black plays safely, keeping the bishop near the king. Castle now and keep developing.",
+                                  "children": [
+                                    {
+                                      "san": "O-O",
+                                      "idea": "Your king is safe and your rook is ready to join the game. Next, bring your knight from b1 out and push c3.",
+                                      "children": [],
+                                      "main": true
+                                    }
+                                  ]
+                                }
+                              ],
+                              "main": true
+                            }
+                          ]
+                        },
+                        {
+                          "san": "d6",
+                          "idea": "Black plays solidly but locks the bishop on f8 behind its pawns. Keep developing: castle, then play c3 and d4 to take more of the center.",
+                          "children": []
+                        },
+                        {
+                          "san": "Be7",
+                          "name": "Hungarian Defense",
+                          "idea": "Black plays very safely, keeping the bishop near the king. Grab more space with d4, or keep it calm with d3 and castling.",
+                          "children": []
+                        }
+                      ],
+                      "main": true
+                    }
+                  ]
+                },
+                {
+                  "san": "d6",
+                  "name": "Philidor Defense",
+                  "idea": "Black defends e5 with a pawn, but that blocks Black's bishop on f8. Take more center with d4 and develop your pieces quickly.",
+                  "children": []
+                },
+                {
+                  "san": "Nf6",
+                  "name": "Petrov Defense",
+                  "idea": "Black attacks your pawn on e4 instead of defending e5. A simple answer is Nc3, which protects e4 and develops a piece.",
+                  "children": []
+                }
+              ],
+              "main": true
+            }
+          ]
+        },
+        {
+          "san": "c5",
+          "name": "Sicilian Defense",
+          "idea": "Black fights for the d4 square from the side. Develop your knight to f3, then push d4 to open the center.",
+          "children": []
+        },
+        {
+          "san": "e6",
+          "name": "French Defense",
+          "idea": "Black plans d5 next to attack your pawn on e4. Push d4 now so you have two strong pawns in the center.",
+          "children": []
+        },
+        {
+          "san": "d5",
+          "name": "Scandinavian Defense",
+          "idea": "Black attacks your pawn on e4 right away. Take it with exd5, and if Black's queen takes back, chase it by developing your knight to c3.",
+          "children": []
+        }
+      ],
+      "main": true
+    }
+  ],
+  "black": [
+    {
+      "san": "e4",
+      "name": "King's Pawn Opening",
+      "idea": "White grabs the center with the e-pawn. Answer with e5 so you get your share of the middle.",
+      "children": [
+        {
+          "san": "e5",
+          "idea": "Your pawn on e5 claims the center and opens lines for your queen and your dark-squared bishop. Next, bring out your knights.",
+          "children": [
+            {
+              "san": "Nf3",
+              "idea": "White's knight attacks your pawn on e5. Protect it by developing your knight to c6.",
+              "children": [
+                {
+                  "san": "Nc6",
+                  "idea": "Your knight on c6 protects e5 and develops toward the center. It also watches the d4 square.",
+                  "children": [
+                    {
+                      "san": "Bc4",
+                      "name": "Italian Game",
+                      "idea": "White's bishop aims at f7, the weak square next to your king. Copy the idea with Bc5, aiming at f2.",
+                      "children": [
+                        {
+                          "san": "Bc5",
+                          "name": "Giuoco Piano",
+                          "idea": "Your bishop on c5 aims at f2, White's weak spot. Next, play Nf6 and castle to get your king safe.",
+                          "children": [
+                            {
+                              "san": "c3",
+                              "idea": "White wants to push d4 and chase your bishop. Attack the pawn on e4 with Nf6 so White has to keep defending.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Your knight attacks e4 and clears the way to castle. If White pushes d4, take it with exd4.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            },
+                            {
+                              "san": "O-O",
+                              "idea": "White's king is now safe. Bring out your knight with Nf6, then castle too.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Your knight develops and attacks the pawn on e4. Castle next so your king is safe as well.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            },
+                            {
+                              "san": "d3",
+                              "idea": "White plays quietly and protects the pawn on e4. Develop your knight to f6, then castle.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Your knight comes out toward the center and clears the way to castle. Castle next to keep your king safe.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            }
+                          ],
+                          "main": true
+                        }
+                      ]
+                    },
+                    {
+                      "san": "Bb5",
+                      "name": "Ruy Lopez",
+                      "idea": "White's bishop attacks your knight on c6, the piece guarding e5. Push a6 to make the bishop decide: step back or trade.",
+                      "children": [
+                        {
+                          "san": "a6",
+                          "idea": "Your pawn on a6 attacks the bishop. If it takes your knight, take back with the d-pawn (dxc6).",
+                          "children": [
+                            {
+                              "san": "Ba4",
+                              "idea": "The bishop steps back to a4 but still looks at your knight on c6. Keep developing with Nf6, attacking the pawn on e4.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Your knight develops and attacks the pawn on e4. Next, bring your bishop to e7 and castle.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            },
+                            {
+                              "san": "Bxc6",
+                              "idea": "White trades the bishop for your knight. Take back with the d-pawn (dxc6) to open lines for your queen and your bishop on c8.",
+                              "children": [
+                                {
+                                  "san": "dxc6",
+                                  "idea": "Your queen and your bishop on c8 now have open lines. If White grabs e5 with Nxe5, Qd4 attacks the knight and the pawn on e4 to win the pawn back.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            }
+                          ],
+                          "main": true
+                        }
+                      ]
+                    },
+                    {
+                      "san": "d4",
+                      "name": "Scotch Game",
+                      "idea": "White opens the center right away. Take the pawn with exd4.",
+                      "children": [
+                        {
+                          "san": "exd4",
+                          "idea": "You take the pawn; White will usually take it back with the knight. Then develop quickly.",
+                          "children": [
+                            {
+                              "san": "Nxd4",
+                              "idea": "White's knight takes back and sits in the center on d4. Develop your knight to f6 to attack the pawn on e4.",
+                              "children": [
+                                {
+                                  "san": "Nf6",
+                                  "idea": "Your knight develops and attacks the pawn on e4. Next, bring out your bishop and castle.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            }
+                          ],
+                          "main": true
+                        }
+                      ]
+                    }
+                  ],
+                  "main": true
+                }
+              ]
+            },
+            {
+              "san": "Nc3",
+              "name": "Vienna Game",
+              "idea": "White develops a knight that protects e4. Develop too: Nf6 is a good, simple reply, followed by your bishop and castling.",
+              "children": []
+            },
+            {
+              "san": "Bc4",
+              "name": "Bishop's Opening",
+              "idea": "White's bishop aims at f7 early. Develop your knight to f6 to attack e4, and watch for White's queen joining the attack on f7.",
+              "children": []
+            },
+            {
+              "san": "f4",
+              "name": "King's Gambit",
+              "idea": "White offers a pawn to open lines toward your king. Taking with exf4 is fine; then develop quickly and keep your king safe.",
+              "children": []
+            }
+          ],
+          "main": true
+        }
+      ]
+    },
+    {
+      "san": "d4",
+      "name": "Queen's Pawn Opening",
+      "idea": "White grabs the center with the d-pawn. Answer with d5 so White cannot take the whole middle.",
+      "children": [
+        {
+          "san": "d5",
+          "idea": "Your pawn on d5 stands up to White's pawn on d4. It also opens a path for your light-squared bishop.",
+          "children": [
+            {
+              "san": "c4",
+              "name": "Queen's Gambit",
+              "idea": "White offers the c-pawn to pull your d5 pawn away from the center. Keep your center strong with e6.",
+              "children": [
+                {
+                  "san": "e6",
+                  "name": "Queen's Gambit Declined",
+                  "idea": "Your pawn on e6 supports d5, so your center stays strong. It also opens the path for your bishop on f8.",
+                  "children": [
+                    {
+                      "san": "Nc3",
+                      "idea": "White adds pressure on your pawn on d5. Defend it and develop with Nf6.",
+                      "children": [
+                        {
+                          "san": "Nf6",
+                          "idea": "Your knight guards d5 and clears the way to castle. Next, develop your bishop to e7 and castle.",
+                          "children": [
+                            {
+                              "san": "Bg5",
+                              "idea": "White's bishop pins your knight on f6 to your queen on d8. Break the pin with Be7, then castle.",
+                              "children": [
+                                {
+                                  "san": "Be7",
+                                  "idea": "Your bishop on e7 blocks the pin, so your knight on f6 is free again. Next, castle to make your king safe.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            },
+                            {
+                              "san": "Nf3",
+                              "idea": "White develops another knight. Bring your bishop to e7 and get ready to castle.",
+                              "children": [
+                                {
+                                  "san": "Be7",
+                                  "idea": "Your bishop on e7 clears the way for castling. Castle next to make your king safe.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            },
+                            {
+                              "san": "cxd5",
+                              "idea": "White trades pawns on d5. Take back with exd5 so you keep a pawn in the center.",
+                              "children": [
+                                {
+                                  "san": "exd5",
+                                  "idea": "Your pawn on d5 still holds the center, and your bishop on c8 now has an open path. Next, develop with Be7 and castle.",
+                                  "children": [],
+                                  "main": true
+                                }
+                              ]
+                            }
+                          ],
+                          "main": true
+                        }
+                      ]
+                    },
+                    {
+                      "san": "Nf3",
+                      "idea": "White develops a knight. Keep developing with Nf6, which also guards your pawn on d5.",
+                      "children": [
+                        {
+                          "san": "Nf6",
+                          "idea": "Your knight guards d5 and clears the way to castle. Next, develop your bishop to e7 and castle.",
+                          "children": [],
+                          "main": true
+                        }
+                      ]
+                    }
+                  ],
+                  "main": true
+                }
+              ]
+            },
+            {
+              "san": "Nf3",
+              "idea": "White develops a knight first. Develop yours with Nf6.",
+              "children": [
+                {
+                  "san": "Nf6",
+                  "idea": "Your knight comes out toward the center and helps guard d5. Next, play e6, then develop your bishop and castle.",
+                  "children": [
+                    {
+                      "san": "c4",
+                      "idea": "White attacks your pawn on d5 with the c-pawn. Support it with e6.",
+                      "children": [
+                        {
+                          "san": "e6",
+                          "name": "Queen's Gambit Declined",
+                          "idea": "Your pawn on e6 supports d5, so your center stays strong. It also opens the path for your bishop on f8.",
+                          "children": [],
+                          "main": true
+                        }
+                      ]
+                    }
+                  ],
+                  "main": true
+                }
+              ]
+            },
+            {
+              "san": "Bf4",
+              "name": "London System",
+              "idea": "White brings the bishop out early to f4. Develop calmly with Nf6, then play e6.",
+              "children": [
+                {
+                  "san": "Nf6",
+                  "idea": "Your knight develops and helps guard d5. Next, play e6 so your bishop on f8 can come out.",
+                  "children": [
+                    {
+                      "san": "e3",
+                      "idea": "White builds a solid pawn chain. Play e6 to support d5 and free your bishop on f8.",
+                      "children": [
+                        {
+                          "san": "e6",
+                          "idea": "Your pawns on d5 and e6 form a strong wall. Next, bring your bishop to d6 or e7, castle, and later push c5 to challenge White's center.",
+                          "children": [],
+                          "main": true
+                        }
+                      ]
+                    }
+                  ],
+                  "main": true
+                }
+              ]
+            }
+          ],
+          "main": true
+        }
+      ]
+    }
+  ]
+}
