@@ -10,3 +10,6 @@ export type GameResult = {
   reason: 'checkmate' | 'stalemate' | 'repetition' | 'fifty_move' | 'insufficient' | 'resign' | 'timeout';
 };
 export interface PlayedMove { san: string; uci: string; fenBefore: string; fenAfter: string; color: Color }
+
+export interface EngineLine { uci: string[]; cp: number | null; mate: number | null } // side-to-move POV
+export interface Analysis { fen: string; depth: number; lines: EngineLine[] }           // lines[0] = best
