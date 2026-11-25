@@ -22,7 +22,9 @@ describe('positionFacts', () => {
 
   it('flags an undefended knight attacked by a bishop', () => {
     const f = positionFacts('4k3/8/5n2/6B1/8/8/8/4K3 w - - 0 1');
-    expect(f.hanging).toContainEqual({ square: 'f6', piece: 'n', color: 'b' });
+    expect(f.hanging).toContainEqual({
+      square: 'f6', piece: 'n', color: 'b', reason: 'undefended', attacker: { square: 'g5', piece: 'b', color: 'w' },
+    });
   });
 
   it('does not flag a defended knight attacked by an equal piece', () => {
@@ -32,7 +34,9 @@ describe('positionFacts', () => {
 
   it('flags a defended queen attacked by a pawn', () => {
     const f = positionFacts('3rk3/8/8/3q4/4P3/8/8/4K3 w - - 0 1');
-    expect(f.hanging).toContainEqual({ square: 'd5', piece: 'q', color: 'b' });
+    expect(f.hanging).toContainEqual({
+      square: 'd5', piece: 'q', color: 'b', reason: 'attacked_by_lower', attacker: { square: 'e4', piece: 'p', color: 'w' },
+    });
   });
 
   it('never lists kings as hanging', () => {

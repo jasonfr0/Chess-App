@@ -3,9 +3,18 @@ import type { Square } from 'chess.js';
 import type { Color, PlayedMove } from '../types';
 
 export interface PieceRef { square: string; piece: 'p' | 'n' | 'b' | 'r' | 'q' | 'k'; color: Color }
+/**
+ * A piece the opponent can win. `undefended`: nothing guards it, so it is free.
+ * `attacked_by_lower`: it is guarded, but `attacker` is worth less, so taking it still wins material.
+ * `attacker` is the cheapest enemy piece that can legally capture it.
+ */
+export interface HangingPiece extends PieceRef {
+  reason: 'undefended' | 'attacked_by_lower';
+  attacker: PieceRef;
+}
 export interface PositionFacts {
   material: { w: number; b: number };
-  hanging: PieceRef[];
+  hanging: HangingPiece[];
   attackedBy(lastMoveUci: string): PieceRef[];
   forks: { attacker: PieceRef; targets: PieceRef[] }[];
   inCheck: boolean;
@@ -48,16 +57,17 @@ function capturers(chess: Chess, fen: string, target: PieceRef, byColor: Color):
     .filter(Boolean);
 }
 
-function findHanging(chess: Chess, fen: string, pieces: PieceRef[]): PieceRef[] {
-  const out: PieceRef[] = [];
+function findHanging(chess: Chess, fen: string, pieces: PieceRef[]): HangingPiece[] {
+  const out: HangingPiece[] = [];
   for (const p of pieces) {
     if (p.piece === 'k') continue;
     const enemy = opposite(p.color);
     const caps = capturers(chess, fen, p, enemy);
     if (caps.length === 0) continue;
+    const cheapest = caps.reduce((a, b) => (VALUE[b.piece] < VALUE[a.piece] ? b : a));
     const undefended = chess.attackers(p.square as Square, p.color).length === 0;
-    const byLower = caps.some((a) => VALUE[a.piece] < VALUE[p.piece]);
-    if (undefended || byLower) out.push(p);
+    if (undefended) out.push({ ...p, reason: 'undefended', attacker: cheapest });
+    else if (VALUE[cheapest.piece] < VALUE[p.piece]) out.push({ ...p, reason: 'attacked_by_lower', attacker: cheapest });
   }
   return out;
 }

@@ -4,7 +4,7 @@ import type { Analysis, CoachLevel, Color, EngineLine, PlayedMove, Theme } from 
 import type { BookHit } from '../openings/repertoire';
 import type { Verdict } from './classify';
 import { positionFacts } from './facts';
-import type { PieceRef, PositionFacts } from './facts';
+import type { HangingPiece, PieceRef, PositionFacts } from './facts';
 
 export interface Candidate { san: string; uci: string; note: string; best: boolean }
 export interface Explanation {
@@ -50,6 +50,13 @@ const toUci = (m: Move) => m.from + m.to + (m.promotion ?? '');
 function joinList(items: string[]): string {
   return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 }
+
+/** "attacks both A and B" for exactly two targets; "attacks A, B and C" otherwise. */
+function attacksList(items: string[]): string {
+  return `attacks ${items.length === 2 ? 'both ' : ''}${joinList(items)}`;
+}
+
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function tryFen(fen: string, uci: string): string | null {
   try {
@@ -154,7 +161,7 @@ export function preMoveTemplate(ctx: PreMoveContext): Explanation {
   const targets = facts.attackedBy(lastMove.uci).filter((p) => p.color === me && p.piece !== 'k');
   const fork = facts.forks.find((f) => f.attacker.square === to && f.attacker.color === lastMove.color);
   if (fork) {
-    parts.push(`Their ${NAMES[fork.attacker.piece]} on ${to} attacks both ${joinList(fork.targets.map((t) => describe(t, me)))}.`);
+    parts.push(`Their ${NAMES[fork.attacker.piece]} on ${to} ${attacksList(fork.targets.map((t) => describe(t, me)))}.`);
   } else if (targets.length > 0) {
     parts.push(`Their last move, ${lastMove.san}, means their piece on ${to} now attacks ${joinList(targets.map((t) => describe(t, me)))}.`);
   } else if (!book) {
@@ -165,7 +172,7 @@ export function preMoveTemplate(ctx: PreMoveContext): Explanation {
 }
 
 /** The first refutation move's destination, if it lands on one of the mover's pieces. */
-function capturedPiece(ctx: MistakeContext): PieceRef | null {
+function capturedPiece(ctx: MistakeContext): HangingPiece | null {
   const { verdict, move, factsAfter } = ctx;
   const mine = factsAfter.hanging.filter((p) => p.color === move.color);
   const dest = verdict.refutationSan[0] ? sanDest(verdict.refutationSan[0]) : null;
@@ -198,7 +205,7 @@ function betterReason(ctx: MistakeContext): string {
       return best.endsWith('#') ? `${best} was checkmate.` : `${best} led to a forced checkmate.`;
     case 'missed_fork': {
       const f = facts?.forks.find((x) => x.attacker.square === dest && x.attacker.color === move.color);
-      if (f) return `${best} would have attacked both ${joinList(f.targets.map((t) => describe(t, move.color)))} at once.`;
+      if (f) return `${best} would have ${attacksList(f.targets.map((t) => describe(t, move.color))).replace(/^attacks/, 'attacked')} at once.`;
       break;
     }
     case 'missed_pin':
@@ -209,6 +216,12 @@ function betterReason(ctx: MistakeContext): string {
       return `${best} was the move the engine preferred; it avoids losing material.`;
   }
   return `${best} was the engine's top choice here.`;
+}
+
+/** "Free" only when nothing defends it; a guarded piece attacked by a cheaper one "can be won". */
+function loss(p: HangingPiece, viewer: Color): string {
+  if (p.reason === 'undefended') return 'can be taken for free';
+  return `can be won: ${describe(p.attacker, viewer)} can take it, and a ${NAMES[p.attacker.piece]} is worth less than a ${NAMES[p.piece]}`;
 }
 
 function whatHappenedMistake(ctx: MistakeContext): string {
@@ -222,8 +235,8 @@ function whatHappenedMistake(ctx: MistakeContext): string {
       const p = capturedPiece(ctx);
       if (p) {
         const lead = verdict.theme === 'hanging_piece'
-          ? `After ${move.san}, ${describe(p, move.color)} can be taken for free.`
-          : `${describe(p, move.color)} was already under attack and ${move.san} did not save it.`;
+          ? `After ${move.san}, ${describe(p, move.color)} ${loss(p, move.color)}.`
+          : `${capitalise(describe(p, move.color))} was already under attack and ${move.san} did not save it.`;
         return `${lead} They can play ${reply}, and the engine's line is ${line}.`;
       }
       break;
@@ -233,7 +246,7 @@ function whatHappenedMistake(ctx: MistakeContext): string {
     case 'allowed_fork': {
       const f = forkAfterReply(ctx);
       if (f) {
-        return `After ${move.san}, they can play ${reply}, and their ${NAMES[f.attacker.piece]} on ${f.attacker.square} attacks both ${joinList(f.targets.map((t) => describe(t, move.color)))}.`;
+        return `After ${move.san}, they can play ${reply}, and their ${NAMES[f.attacker.piece]} on ${f.attacker.square} ${attacksList(f.targets.map((t) => describe(t, move.color)))}.`;
       }
       break;
     }
