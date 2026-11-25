@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
-import { positionFacts, principleViolations, uciLineToSan } from '../../src/coach/facts';
+import { pins, positionFacts, principleViolations, uciLineToSan } from '../../src/coach/facts';
 import type { PlayedMove } from '../../src/types';
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -130,5 +130,28 @@ describe('principleViolations', () => {
     const h: PlayedMove[] = [{ san: 'O-O', uci: 'e1g1', fenBefore: fen, fenAfter: fen, color: 'w' }];
     for (let i = 0; i < 9; i++) h.push({ san: 'Rb1', uci: 'a1b1', fenBefore: fen, fenAfter: fen, color: 'w' });
     expect(principleViolations(h, 'w')).not.toContain('king_safety');
+  });
+});
+
+describe('pins', () => {
+  it('finds an absolute pin of a knight to the king', () => {
+    expect(pins('4k3/8/2n5/1B6/8/8/8/4K3 b - - 0 1')).toEqual([
+      {
+        pinner: { square: 'b5', piece: 'b', color: 'w' },
+        pinned: { square: 'c6', piece: 'n', color: 'b' },
+        behind: { square: 'e8', piece: 'k', color: 'b' },
+      },
+    ]);
+  });
+
+  it('finds a relative pin of a knight to the queen', () => {
+    const p = pins('3qk3/8/5n2/6B1/8/8/8/4K3 b - - 0 1');
+    expect(p.map((x) => [x.pinner.square, x.pinned.square, x.behind.square])).toEqual([['g5', 'f6', 'd8']]);
+  });
+
+  it('ignores lower-value pieces behind, own pieces, and pieces of the pinner colour in between', () => {
+    expect(pins('4k3/8/8/1p6/8/3q4/8/1B2K3 w - - 0 1')).toEqual([]); // queen in front of pawn: not a pin
+    expect(pins('4k3/8/2N5/1B6/8/8/8/4K3 b - - 0 1')).toEqual([]); // own knight in the way
+    expect(pins('4k3/8/8/8/8/8/8/R3K3 w - - 0 1')).toEqual([]); // nothing on the ray
   });
 });

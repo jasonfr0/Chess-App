@@ -165,3 +165,41 @@ export function principleViolations(history: PlayedMove[], color: Color): Violat
 
   return out;
 }
+
+export interface Pin { pinner: PieceRef; pinned: PieceRef; behind: PieceRef }
+
+const DIAGONALS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+const STRAIGHTS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const RAYS: Partial<Record<PieceRef['piece'], number[][]>> = {
+  b: DIAGONALS, r: STRAIGHTS, q: [...DIAGONALS, ...STRAIGHTS],
+};
+
+/**
+ * Pins by bishops, rooks and queens: an enemy non-king piece on the ray with, directly behind it,
+ * the enemy king (absolute pin) or a higher-value enemy piece (relative pin).
+ */
+export function pins(fen: string): Pin[] {
+  const chess = new Chess(fen);
+  const pieces = allPieces(chess);
+  const at = new Map(pieces.map((p) => [p.square, p]));
+  const out: Pin[] = [];
+  for (const pinner of pieces) {
+    for (const [df, dr] of RAYS[pinner.piece] ?? []) {
+      const onRay: PieceRef[] = [];
+      let f = pinner.square.charCodeAt(0) - 97 + df;
+      let r = Number(pinner.square[1]) + dr;
+      while (f >= 0 && f < 8 && r >= 1 && r <= 8 && onRay.length < 2) {
+        const p = at.get(String.fromCharCode(97 + f) + r);
+        if (p) onRay.push(p);
+        f += df;
+        r += dr;
+      }
+      const [pinned, behind] = onRay;
+      if (!pinned || !behind) continue;
+      const enemy = opposite(pinner.color);
+      if (pinned.color !== enemy || behind.color !== enemy || pinned.piece === 'k') continue;
+      if (behind.piece === 'k' || VALUE[behind.piece] > VALUE[pinned.piece]) out.push({ pinner, pinned, behind });
+    }
+  }
+  return out;
+}
