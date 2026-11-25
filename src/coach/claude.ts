@@ -16,12 +16,14 @@ export interface FactPacket {
   profile: ProfileSummary;
 }
 
-const SAN_RE = /\b(O-O(-O)?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?[+#]?)\b/g;
-const strip = (s: string) => s.replace(/[+#]/g, '');
+const SAN_RE = /\b([O0]-[O0](-[O0])?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?[+#]?)\b/gi;
+const strip = (s: string) => s.replace(/[+#]/g, '').replace(/0/g, 'O');
 
 /** SAN-like tokens that are really moves: piece-letter start, a capture, or castling. Bare squares are not. */
 function moveTokens(text: string): string[] {
-  return (text.match(SAN_RE) ?? []).filter((t) => /^[KQRBN]/.test(t) || t.includes('x') || t.startsWith('O-O'));
+  return (text.match(SAN_RE) ?? []).filter(
+    (t) => /^[KQRBN]/.test(t) || (/^[kqrbn]/.test(t) && t.length >= 3) || /[x=]/i.test(t) || /^[O0]-[O0]/.test(t),
+  );
 }
 
 function explanationStrings(e: Explanation): string[] {
@@ -35,7 +37,10 @@ function explanationStrings(e: Explanation): string[] {
 export function validateExplanation(e: Explanation, allowed: string[]): boolean {
   const ok = new Set(allowed.map(strip));
   for (const s of explanationStrings(e)) {
-    for (const t of moveTokens(s)) if (!ok.has(strip(t))) return false;
+    for (const t of moveTokens(s)) {
+      const n = strip(t);
+      if (!ok.has(n) && !ok.has(n[0].toUpperCase() + n.slice(1))) return false;
+    }
   }
   for (const c of e.candidates ?? []) if (!ok.has(strip(c.san))) return false;
   return true;
@@ -140,7 +145,12 @@ export async function explainWithClaude(
     const msg = await Promise.race([opts.client.beta.messages.parse(req, { signal: ctrl.signal }), timeout, aborted]);
     if (!msg || msg.stop_reason === 'refusal' || !msg.parsed_output) return null;
     const out = msg.parsed_output as Explanation;
-    return validateExplanation(out, packet.allowedMoves) ? out : null;
+    if (!validateExplanation(out, packet.allowedMoves)) return null;
+    // Only prose comes from Claude; the candidate list, uci and best flags are the engine's.
+    const tc = packet.template.candidates;
+    const candidates = tc?.map((c) => ({ ...c, note: out.candidates?.find((x) => x.san === c.san)?.note ?? c.note }));
+    const { candidates: _drop, ...rest } = out;
+    return candidates ? { ...rest, candidates } : rest;
   } catch {
     return null;
   } finally {

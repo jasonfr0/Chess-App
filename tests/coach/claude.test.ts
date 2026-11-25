@@ -27,7 +27,7 @@ describe('explainWithClaude', () => {
     expect(reqs[0].output_config.effort).toBe('low');
     expect(reqs[0].fallbacks).toBe('default');
     expect(reqs[0].betas).toEqual(['server-side-fallback-2026-07-01']);
-    expect('temperature' in reqs[0]).toBe(false);
+    for (const k of ['temperature', 'top_p', 'top_k', 'thinking']) expect(k in reqs[0]).toBe(false);
     expect(reqs[0].system[0].cache_control).toEqual({ type: 'ephemeral' });
   });
   it('omits fallbacks and betas for haiku', async () => {
@@ -56,7 +56,31 @@ describe('explainWithClaude', () => {
   });
 });
 
+describe('candidates', () => {
+  it('keeps san/uci/best from the template, only taking notes from Claude', async () => {
+    const template: Explanation = { whatHappened: 'x', candidates: [
+      { san: 'Nf3', uci: 'g1f3', note: 'develops', best: true }, { san: 'Nc3', uci: 'b1c3', note: 'solid', best: false }] };
+    const p: FactPacket = { ...packet, allowedMoves: ['Nf3', 'Nc3', 'Bc4'], template };
+    const claude: Explanation = { whatHappened: 'ok', candidates: [
+      { san: 'Nc3', uci: 'zzzz', note: 'nice', best: true }, { san: 'Nf3', uci: 'b1c3', note: 'good', best: false },
+      { san: 'Bc4', uci: 'f1c4', note: 'extra', best: true }] };
+    const { client } = fake({ stop_reason: 'end_turn', parsed_output: claude });
+    const out = await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' });
+    expect(out!.candidates).toEqual([
+      { san: 'Nf3', uci: 'g1f3', note: 'good', best: true }, { san: 'Nc3', uci: 'b1c3', note: 'nice', best: false }]);
+  });
+});
+
 describe('validateExplanation', () => {
+  it('catches 0-0 castling, lowercase piece moves and promotions', () => {
+    expect(validateExplanation({ whatHappened: 'try 0-0 now' }, [])).toBe(false);
+    expect(validateExplanation({ whatHappened: 'try 0-0-0' }, ['O-O-O'])).toBe(true);
+    expect(validateExplanation({ whatHappened: 'play nf3' }, [])).toBe(false);
+    expect(validateExplanation({ whatHappened: 'play nf3' }, ['Nf3'])).toBe(true);
+    expect(validateExplanation({ whatHappened: 'push to e8=Q' }, [])).toBe(false);
+    expect(validateExplanation({ whatHappened: 'push to e8=Q+' }, ['e8=Q'])).toBe(true);
+    expect(validateExplanation({ whatHappened: 'the b4 square and e5' }, [])).toBe(true);
+  });
   it('treats bare squares in prose as squares', () => {
     expect(validateExplanation({ whatHappened: 'Control the e5 square.' }, [])).toBe(true);
   });
