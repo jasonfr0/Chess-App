@@ -15,3 +15,16 @@ export interface EngineLine { uci: string[]; cp: number | null; mate: number | n
 export interface Analysis { fen: string; depth: number; lines: EngineLine[] }           // lines[0] = best
 
 export interface ProfileSummary { topThemes: { theme: Theme; count: number }[]; gamesPlayed: number }
+
+export interface ThemeStat {
+  count: number;
+  lastSeen: number;
+  examples: { gameId: string; ply: number; fen: string }[];
+}
+export interface MoveRecord { good: boolean; flagged: boolean; at: number }
+export interface ProfileData {
+  themes: Record<Theme, ThemeStat>;
+  moves: Record<Area, MoveRecord[]>;
+  levels: Record<Area, CoachLevel>;
+  levelChangedAt?: Partial<Record<Area, number>>;
+}
