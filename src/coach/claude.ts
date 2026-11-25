@@ -14,6 +14,8 @@ export interface FactPacket {
   fen: string;
   /** mistake only: the position after the user's move. */
   fenAfter?: string;
+  /** pre_move only: the position before the opponent's last move. */
+  fenBefore?: string;
   /** Pieces the opponent can win: in `fen` for pre_move, in `fenAfter` for a mistake. */
   hanging: HangingPiece[];
   sanHistory: string[];
@@ -65,20 +67,33 @@ function boardOf(fen: string | undefined): Chess | null {
 
 /**
  * Squares and pieces in prose must match the packet (spec §8):
- * - "<piece> on <square>" needs that piece type on that square in `fen` or `fenAfter`;
+ * - "<piece> on <square>" needs that piece type on that square in `fen`, `fenAfter` or `fenBefore`
+ *   (a candidate's note may also describe the position after that candidate);
  * - a sentence about one particular piece that calls it "hanging" must name a square from the
  *   hanging list, and "free"/"undefended" additionally need that piece's reason to be "undefended".
  * Sentences naming no piece or square (general habits) are not claims about the board.
  */
-export function validateClaims(e: Explanation, packet: Pick<FactPacket, 'fen' | 'fenAfter' | 'hanging'>): boolean {
-  const boards = [boardOf(packet.fen), boardOf(packet.fenAfter)].filter((b): b is Chess => b !== null);
-  const standsOn = (piece: string, sq: string) =>
-    boards.some((b) => b.get(sq as Square)?.type === PIECE_WORDS[piece.toLowerCase()]);
+export function validateClaims(
+  e: Explanation, packet: Pick<FactPacket, 'fen' | 'fenAfter' | 'fenBefore' | 'hanging'>,
+): boolean {
+  const boards = [packet.fen, packet.fenAfter, packet.fenBefore].map(boardOf).filter((b): b is Chess => b !== null);
+  const afterCandidate = (san: string): Chess[] => {
+    const b = boardOf(packet.fen);
+    try { b?.move(san); return b ? [b] : []; } catch { return []; }
+  };
   const anyHanging = new Set(packet.hanging.map((h) => h.square));
   const freeHanging = new Set(packet.hanging.filter((h) => h.reason === 'undefended').map((h) => h.square));
 
-  for (const text of explanationStrings(e)) {
-    for (const m of text.matchAll(PIECE_ON_RE)) if (!standsOn(m[1], m[2].toLowerCase())) return false;
+  const texts: { text: string; boards: Chess[] }[] = [e.whatHappened, e.better, e.lesson]
+    .filter((t): t is string => t !== undefined)
+    .map((text) => ({ text, boards }));
+  for (const c of e.candidates ?? []) texts.push({ text: c.note, boards: [...boards, ...afterCandidate(c.san)] });
+
+  for (const { text, boards: on } of texts) {
+    for (const m of text.matchAll(PIECE_ON_RE)) {
+      const type = PIECE_WORDS[m[1].toLowerCase()];
+      if (!on.some((b) => b.get(m[2].toLowerCase() as Square)?.type === type)) return false;
+    }
     for (const sentence of text.split(/(?<=[.!?;])\s+/)) {
       const free = /\b(free|undefended)\b/i.test(sentence);
       if (!free && !/\bhang(s|ing)?\b/i.test(sentence)) continue;
@@ -110,7 +125,7 @@ export function buildPacket(
     const c = ctx as PreMoveContext;
     const { hanging, forks, material, inCheck } = c.facts;
     return {
-      kind, fen: c.fen, hanging, sanHistory: [c.lastMove.san],
+      kind, fen: c.fen, fenBefore: c.lastMove.fenBefore, hanging, sanHistory: [c.lastMove.san],
       allowedMoves: allowedFrom([c.lastMove.san], t),
       facts: {
         lastOpponentMove: c.lastMove.san, forks, material, inCheck,
@@ -149,7 +164,7 @@ Truth rule (strict):
 - Mention only moves listed in allowedMoves. Never calculate new lines or invent variations, and never contradict the facts.
 - Every claim about the position must come from the facts. Never claim a fork "wins" material; say it "attacks" the pieces.
 - "hanging" lists the pieces the opponent can win (in "fen" for pre_move, in "fenAfter" for a mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
-- When you write "<piece> on <square>", that piece must stand on that square in "fen" or "fenAfter".
+- When you write "<piece> on <square>", that piece must stand on that square in "fen", "fenAfter" or "fenBefore" (a candidate's note may also describe the position after that candidate).
 - Keep candidates (san, uci, best) exactly as in the template; you may only improve each note, using only true statements from the template and facts.
 
 Style:
