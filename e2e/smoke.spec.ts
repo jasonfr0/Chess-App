@@ -50,6 +50,16 @@ test('stops on a hanging move and takes it back', async ({ page }) => {
   await expect(card).toBeHidden();
   expect(await boardFen(page)).toBe(HANGING_FEN);
   await expect(page.getByRole('button', { name: 'Hint 1' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Hint 1' }).click();
+  await expect(page.locator('.hints li')).toHaveCount(1);
+
+  // The retry is judged by the same (still running) engine and the opponent replies.
+  // Wait for the take-back animation to put the bishop home before tapping it.
+  await expect(page.locator('.board [data-square="f1"] [data-piece="wB"]')).toBeVisible();
+  await tapMove(page, 'f1', 'e2');
+  await expect(page.getByLabel('Moves')).toContainText('Be2');
+  await expect(page.getByLabel('Moves')).toHaveText(/Be2 \S+/, { timeout: 20_000 });
+  await expect(page.getByRole('status').filter({ hasText: 'Your move.' })).toBeVisible();
 
   const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(scrollWidth).toBeLessThanOrEqual(360);
