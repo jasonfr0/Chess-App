@@ -7,6 +7,7 @@ export function parseInfo(line: string): { multipv: number; depth: number; line:
   const scoreAt = t.indexOf('score');
   const depthAt = t.indexOf('depth');
   if (pvAt < 0 || pvAt === t.length - 1 || scoreAt < 0 || depthAt < 0) return null;
+  if (t.includes('lowerbound') || t.includes('upperbound')) return null;
   const kind = t[scoreAt + 1];
   const value = Number(t[scoreAt + 2]);
   if ((kind !== 'cp' && kind !== 'mate') || !Number.isFinite(value)) return null;

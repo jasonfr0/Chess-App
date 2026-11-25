@@ -25,3 +25,10 @@ describe('parseBestMove', () => {
   it('returns null for (none)', () => expect(parseBestMove('bestmove (none)')).toBeNull());
   it('returns null for other lines', () => expect(parseBestMove('info depth 1')).toBeNull());
 });
+
+describe('parseInfo bounds', () => {
+  it('skips lowerbound/upperbound lines', () => {
+    expect(parseInfo('info depth 10 multipv 1 score cp 50 lowerbound nodes 1 pv e2e4')).toBeNull();
+    expect(parseInfo('info depth 10 multipv 1 score cp 50 upperbound nodes 1 pv e2e4')).toBeNull();
+  });
+});
