@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { buildPacket, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
+import { describe, it, expect, vi } from 'vitest';
+import { buildPacket, createExplainer, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
 import type { ClaudeClientLike, FactPacket } from '../../src/coach/claude';
 import type { Explanation, MistakeContext } from '../../src/coach/templates';
 import type { ProfileSummary } from '../../src/types';
@@ -25,7 +25,7 @@ function fake(result: unknown | (() => Promise<unknown>)) {
 describe('explainWithClaude', () => {
   it('returns a valid parsed output and sends the right request for sonnet', async () => {
     const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
-    expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toEqual(good);
+    expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: true, explanation: good });
     expect(reqs[0].model).toBe('claude-sonnet-5-5');
     expect(reqs[0].output_config.effort).toBe('low');
     expect(reqs[0].fallbacks).toBe('default');
@@ -41,21 +41,30 @@ describe('explainWithClaude', () => {
   });
   it('discards output mentioning a move not allowed', async () => {
     const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Qxh7 wins.' } });
-    expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toBeNull();
+    expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
   });
-  it('returns null for null output, refusal, rejection, and timeout', async () => {
+  it('never throws, and says why it failed', async () => {
     const m = 'claude-sonnet-5-5' as const;
-    expect(await explainWithClaude(packet, { client: fake({ parsed_output: null }).client, model: m })).toBeNull();
-    expect(await explainWithClaude(packet, { client: fake({ stop_reason: 'refusal', parsed_output: good }).client, model: m })).toBeNull();
-    const err = Object.assign(new Error('401'), { status: 401 });
-    expect(await explainWithClaude(packet, { client: fake(() => Promise.reject(err)).client, model: m })).toBeNull();
-    expect(await explainWithClaude(packet, { client: fake(() => new Promise(() => {})).client, model: m, timeoutMs: 50 })).toBeNull();
+    const fail = async (result: unknown, timeoutMs?: number) =>
+      explainWithClaude(packet, { client: fake(result).client, model: m, timeoutMs });
+    const rejecting = (e: unknown) => () => Promise.reject(e);
+    const named = (name: string, extra: object = {}) => Object.assign(new Error(name), { name, ...extra });
+    expect(await fail({ parsed_output: null })).toEqual({ ok: false, reason: 'invalid' });
+    expect(await fail({ stop_reason: 'refusal', parsed_output: good })).toEqual({ ok: false, reason: 'refusal' });
+    expect(await fail(rejecting(Object.assign(new Error('401'), { status: 401 })))).toEqual({ ok: false, reason: 'auth' });
+    expect(await fail(rejecting(Object.assign(new Error('403'), { status: 403 })))).toEqual({ ok: false, reason: 'auth' });
+    expect(await fail(rejecting(named('APIConnectionError')))).toEqual({ ok: false, reason: 'network' });
+    expect(await fail(rejecting(new TypeError('Failed to fetch')))).toEqual({ ok: false, reason: 'network' });
+    expect(await fail(rejecting(named('APIConnectionTimeoutError')))).toEqual({ ok: false, reason: 'timeout' });
+    expect(await fail(rejecting(Object.assign(new Error('529'), { status: 529 })))).toEqual({ ok: false, reason: 'api' });
+    expect(await fail(rejecting(Object.assign(new Error('400'), { status: 400 })))).toEqual({ ok: false, reason: 'api' });
+    expect(await fail(() => new Promise(() => {}), 50)).toEqual({ ok: false, reason: 'timeout' });
   });
-  it('returns null when the caller aborts', async () => {
+  it('reports aborted when the caller aborts', async () => {
     const ac = new AbortController();
     const p = explainWithClaude(packet, { client: fake(() => new Promise(() => {})).client, model: 'claude-sonnet-5-5', signal: ac.signal });
     ac.abort();
-    expect(await p).toBeNull();
+    expect(await p).toEqual({ ok: false, reason: 'aborted' });
   });
 });
 
@@ -69,7 +78,7 @@ describe('candidates', () => {
       { san: 'Bc4', uci: 'f1c4', note: 'extra', best: true }] };
     const { client } = fake({ stop_reason: 'end_turn', parsed_output: claude });
     const out = await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' });
-    expect(out!.candidates).toEqual([
+    expect(out.ok && out.explanation.candidates).toEqual([
       { san: 'Nf3', uci: 'g1f3', note: 'good', best: true }, { san: 'Nc3', uci: 'b1c3', note: 'nice', best: false }]);
   });
 });
@@ -141,12 +150,63 @@ describe('validateClaims', () => {
 describe('explainWithClaude claim checks', () => {
   it('discards output that names a piece on the wrong square', async () => {
     const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Your bishop on f3 is strong.' } });
-    expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toBeNull();
+    expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
   });
   it('tells Claude "free" means undefended', async () => {
     const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
     await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
     expect(reqs[0].system[0].text).toContain('"free" only if its reason is "undefended"');
+  });
+});
+
+describe('createExplainer', () => {
+  const setup = (opts: { apiKey?: string; result?: unknown; makeClient?: () => Promise<ClaudeClientLike> } = {}) => {
+    const offline: boolean[] = [];
+    const { client } = fake(opts.result ?? { stop_reason: 'end_turn', parsed_output: good });
+    const makeClient = vi.fn(opts.makeClient ?? (async () => client));
+    const explain = createExplainer({
+      settings: () => ({ apiKey: opts.apiKey ?? 'k', model: 'claude-sonnet-5-5' }),
+      makeClient,
+      onOffline: (o) => offline.push(o),
+    });
+    return { explain, offline, makeClient };
+  };
+
+  it('returns the explanation and clears the offline state', async () => {
+    const { explain, offline } = setup();
+    expect(await explain(packet)).toEqual(good);
+    expect(offline).toEqual([false]);
+  });
+  it('without a key does nothing (the panel already shows offline)', async () => {
+    const { explain, offline, makeClient } = setup({ apiKey: '' });
+    expect(await explain(packet)).toBeNull();
+    expect(makeClient).not.toHaveBeenCalled();
+    expect(offline).toEqual([]);
+  });
+  it('goes offline when the SDK cannot load', async () => {
+    const { explain, offline } = setup({ makeClient: () => Promise.reject(new TypeError('Failed to fetch dynamically imported module')) });
+    expect(await explain(packet)).toBeNull();
+    expect(offline).toEqual([true]);
+  });
+  it('goes offline on network or auth failures', async () => {
+    for (const e of [new TypeError('Failed to fetch'), Object.assign(new Error('401'), { status: 401 })]) {
+      const { explain, offline } = setup({ result: () => Promise.reject(e) });
+      expect(await explain(packet)).toBeNull();
+      expect(offline).toEqual([true]);
+    }
+  });
+  it('stays online for a refusal or a rejected (invalid) answer', async () => {
+    for (const result of [{ stop_reason: 'refusal', parsed_output: good }, { stop_reason: 'end_turn', parsed_output: { whatHappened: 'Qxh7 wins.' } }]) {
+      const { explain, offline } = setup({ result });
+      expect(await explain(packet)).toBeNull();
+      expect(offline).toEqual([false]);
+    }
+  });
+  it('creates the client once per key', async () => {
+    const { explain, makeClient } = setup();
+    await explain(packet);
+    await explain(packet);
+    expect(makeClient).toHaveBeenCalledTimes(1);
   });
 });
 

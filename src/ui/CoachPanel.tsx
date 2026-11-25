@@ -12,11 +12,13 @@ interface Props {
   offline: boolean;
   hints: string[] | null;
   onHint: () => void;
+  /** Offered at light, where the coach stays quiet unless asked. Omitted when the user cannot move. */
+  onAskCoach?: () => void;
 }
 
 const LEVEL_WORDS: Record<CoachLevel, string> = { full: 'Full', guided: 'Guided', light: 'Light', solo: 'Solo' };
 
-export function CoachPanel({ message, consequence, level, showChoices, onShowChoices, offline, hints, onHint }: Props) {
+export function CoachPanel({ message, consequence, level, showChoices, onShowChoices, offline, hints, onHint, onAskCoach }: Props) {
   const [open, setOpen] = useState(true);
   const [revealedFor, setRevealedFor] = useState<string | null>(null);
   const shown = message ?? consequence;
@@ -53,6 +55,9 @@ export function CoachPanel({ message, consequence, level, showChoices, onShowCho
                 ))}
               </div>
             </div>
+          )}
+          {!message && level === 'light' && onAskCoach && (
+            <button type="button" onClick={onAskCoach}>Ask the coach</button>
           )}
           {message && (
             <>

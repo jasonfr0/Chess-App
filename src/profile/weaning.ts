@@ -53,7 +53,10 @@ const AREA_WORDS: Record<Area, string> = { opening: 'the opening', middlegame: '
 export function levelChangeText(c: LevelChange): string {
   const where = AREA_WORDS[c.area];
   if (ORDER.indexOf(c.to) > ORDER.indexOf(c.from)) {
-    return `You've been spotting threats well in ${where}. I'll stop showing your choices there — tap the coach if you want them.`;
+    const praise = `You've been spotting threats well in ${where}.`;
+    if (c.to === 'light') return `${praise} I'll stay quiet unless you tap Ask the coach.`;
+    if (c.to === 'solo') return `${praise} Only a short recap at the end of each game.`;
+    return `${praise} I'll stop showing your choices there — tap the coach if you want them.`;
   }
   return `A few more slips lately in ${where} — I'll show your choices again for a while.`;
 }

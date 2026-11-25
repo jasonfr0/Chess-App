@@ -128,6 +128,15 @@ describe('weaning', () => {
       "You've been spotting threats well in the middlegame. I'll stop showing your choices there — tap the coach if you want them.");
     expect(levelChangeText({ area: 'opening', from: 'guided', to: 'full' })).toBe(
       "A few more slips lately in the opening — I'll show your choices again for a while.");
+    expect(levelChangeText({ area: 'endgame', from: 'solo', to: 'light' })).toBe(
+      "A few more slips lately in the endgame — I'll show your choices again for a while.");
+  });
+
+  it('copy for each step down matches what the new level does', () => {
+    expect(levelChangeText({ area: 'middlegame', from: 'guided', to: 'light' })).toBe(
+      "You've been spotting threats well in the middlegame. I'll stay quiet unless you tap Ask the coach.");
+    expect(levelChangeText({ area: 'endgame', from: 'light', to: 'solo' })).toBe(
+      "You've been spotting threats well in the endgame. Only a short recap at the end of each game.");
   });
 
   it('suggestClock', () => {

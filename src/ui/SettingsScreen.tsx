@@ -62,7 +62,8 @@ export function SettingsScreen({ db, settings, profile, onSettings, onImported }
     a.href = url;
     a.download = `chess-coach-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Revoking at once can cancel the download in some browsers; give it time to start.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     setBackupStatus('Backup downloaded (your API key is not included).');
   };
 

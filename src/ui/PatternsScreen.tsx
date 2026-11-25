@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { THEME_LESSONS } from '../coach/templates';
 import type { ProfileData, Theme } from '../types';
@@ -9,6 +9,11 @@ interface Props { profile: ProfileData }
 
 export function PatternsScreen({ profile }: Props) {
   const [fen, setFen] = useState<string | null>(null);
+  const exampleRef = useRef<HTMLElement>(null);
+  // The board sits above the list, so a tap low on the page would otherwise show nothing.
+  useEffect(() => {
+    if (fen) exampleRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [fen]);
   const themes = (Object.entries(profile.themes) as [Theme, ProfileData['themes'][Theme]][])
     .filter(([, s]) => s.count > 0)
     .sort((a, b) => b[1].count - a[1].count)
@@ -17,7 +22,7 @@ export function PatternsScreen({ profile }: Props) {
   return (
     <div className="screen patterns">
       {fen && (
-        <section className="card" aria-label="Example position">
+        <section className="card" aria-label="Example position" ref={exampleRef}>
           <div className="board">
             <Chessboard
               options={{

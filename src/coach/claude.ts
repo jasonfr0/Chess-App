@@ -163,19 +163,37 @@ export interface ClaudeClientLike {
   beta: { messages: { parse(req: unknown, opts?: { signal?: AbortSignal }): Promise<any> } };
 }
 
+export type ClaudeFailure = 'network' | 'auth' | 'timeout' | 'refusal' | 'invalid' | 'aborted' | 'api';
+export type ClaudeResult = { ok: true; explanation: Explanation } | { ok: false; reason: ClaudeFailure };
+/** Failures meaning Claude cannot be reached with this key right now (the "coach offline" dot). */
+export const OFFLINE_REASONS: ReadonlySet<ClaudeFailure> = new Set(['network', 'auth', 'timeout']);
+
+function failureOf(e: unknown): ClaudeFailure {
+  const status = (e as { status?: unknown } | null)?.status;
+  const name = e instanceof Error ? e.name : '';
+  if (status === 401 || status === 403) return 'auth';
+  if (name === 'APIConnectionTimeoutError') return 'timeout';
+  if (name === 'AbortError' || name === 'APIUserAbortError') return 'aborted';
+  if (typeof status === 'number') return 'api'; // rate limits, overload, bad requests
+  return 'network'; // connection errors, failed fetches, an SDK chunk that could not load
+}
+
+/** Never throws: every failure comes back as { ok: false, reason }. */
 export async function explainWithClaude(
   packet: FactPacket,
   opts: { client: ClaudeClientLike; model: ModelId; signal?: AbortSignal; timeoutMs?: number },
-): Promise<Explanation | null> {
+): Promise<ClaudeResult> {
   const timeoutMs = opts.timeoutMs ?? 15000;
   const ctrl = new AbortController();
   const onAbort = () => ctrl.abort();
-  if (opts.signal?.aborted) return null;
+  const aborted: ClaudeResult = { ok: false, reason: 'aborted' };
+  if (opts.signal?.aborted) return aborted;
   opts.signal?.addEventListener('abort', onAbort);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   try {
     const { betaZodOutputFormat } = await import('@anthropic-ai/sdk/helpers/beta/zod');
-    if (ctrl.signal.aborted) return null; // aborted while the helper was loading
+    if (ctrl.signal.aborted) return aborted; // aborted while the helper was loading
     const req: Record<string, unknown> = {
       model: opts.model,
       max_tokens: 2000,
@@ -187,25 +205,61 @@ export async function explainWithClaude(
       req.betas = ['server-side-fallback-2026-07-01'];
       req.fallbacks = 'default';
     }
-    const timeout = new Promise<null>((resolve) => {
-      timer = setTimeout(() => { ctrl.abort(); resolve(null); }, timeoutMs);
+    const stopped = new Promise<null>((resolve) => {
+      timer = setTimeout(() => { timedOut = true; ctrl.abort(); resolve(null); }, timeoutMs);
+      ctrl.signal.addEventListener('abort', () => resolve(null));
     });
-    const aborted = new Promise<null>((resolve) => ctrl.signal.addEventListener('abort', () => resolve(null)));
-    const msg = await Promise.race([opts.client.beta.messages.parse(req, { signal: ctrl.signal }), timeout, aborted]);
-    if (!msg || msg.stop_reason === 'refusal' || !msg.parsed_output) return null;
+    const msg = await Promise.race([opts.client.beta.messages.parse(req, { signal: ctrl.signal }), stopped]);
+    if (!msg) return timedOut ? { ok: false, reason: 'timeout' } : aborted;
+    if (msg.stop_reason === 'refusal') return { ok: false, reason: 'refusal' };
+    if (!msg.parsed_output) return { ok: false, reason: 'invalid' };
     const out = msg.parsed_output as Explanation;
-    if (!validateExplanation(out, packet.allowedMoves) || !validateClaims(out, packet)) return null;
+    if (!validateExplanation(out, packet.allowedMoves) || !validateClaims(out, packet)) return { ok: false, reason: 'invalid' };
     // Only prose comes from Claude; the candidate list, uci and best flags are the engine's.
     const tc = packet.template.candidates;
     const candidates = tc?.map((c) => ({ ...c, note: out.candidates?.find((x) => x.san === c.san)?.note ?? c.note }));
     const { candidates: _drop, ...rest } = out;
-    return candidates ? { ...rest, candidates } : rest;
-  } catch {
-    return null;
+    return { ok: true, explanation: candidates ? { ...rest, candidates } : rest };
+  } catch (e) {
+    if (timedOut) return { ok: false, reason: 'timeout' };
+    if (ctrl.signal.aborted) return aborted;
+    return { ok: false, reason: failureOf(e) };
   } finally {
     if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/**
+ * The coach's `explain` dependency: builds the client once per key, calls Claude, and reports whether
+ * Claude is unreachable (`onOffline(true)` on network/auth/timeout or an SDK that cannot load;
+ * `onOffline(false)` when Claude answered, even with a refusal or an answer we discarded).
+ */
+export function createExplainer(deps: {
+  settings: () => { apiKey: string; model: ModelId };
+  makeClient?: (apiKey: string) => Promise<ClaudeClientLike>;
+  onOffline: (offline: boolean) => void;
+}): (packet: FactPacket) => Promise<Explanation | null> {
+  const make = deps.makeClient ?? makeClient;
+  let cached: { key: string; client: ClaudeClientLike } | null = null;
+  return async (packet) => {
+    const { apiKey, model } = deps.settings();
+    if (!apiKey) return null; // no key: the panel already shows the coach as offline
+    try {
+      if (cached?.key !== apiKey) cached = { key: apiKey, client: await make(apiKey) };
+    } catch {
+      deps.onOffline(true);
+      return null;
+    }
+    const out = await explainWithClaude(packet, { client: cached.client, model });
+    if (out.ok) {
+      deps.onOffline(false);
+      return out.explanation;
+    }
+    if (OFFLINE_REASONS.has(out.reason)) deps.onOffline(true);
+    else if (out.reason === 'refusal' || out.reason === 'invalid') deps.onOffline(false);
+    return null;
+  };
 }
 
 /** The SDK is loaded on first use so it stays out of the main bundle. */

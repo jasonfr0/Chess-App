@@ -159,6 +159,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
           offline={coachOffline}
           hints={view.hints}
           onHint={actions.nextHint}
+          onAskCoach={canMove ? actions.askCoach : undefined}
         />
       )}
 

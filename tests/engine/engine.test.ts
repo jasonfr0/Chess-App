@@ -73,6 +73,22 @@ describe('createEngine', () => {
     expect(FakeWorker.instances).toHaveLength(2);
   });
 
+  it('busy() is true only while a search is queued or running', async () => {
+    const e = createEngine('x.js');
+    expect(e.busy()).toBe(false);
+    const p = e.analyse('A', { multipv: 1, depth: 1 });
+    expect(e.busy()).toBe(true);
+    await p;
+    expect(e.busy()).toBe(false);
+    FakeWorker.autoRespond = false;
+    const q = e.analyse('B', { multipv: 1, depth: 1 });
+    const r = expect(q).rejects.toThrow('stopped');
+    expect(e.busy()).toBe(true);
+    e.stop();
+    await r;
+    expect(e.busy()).toBe(false);
+  });
+
   it('stop() during a search rejects the pending call', async () => {
     const e = createEngine('x.js');
     await e.analyse('A', { multipv: 1, depth: 1 });

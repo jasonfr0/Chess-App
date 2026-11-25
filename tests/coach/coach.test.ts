@@ -24,6 +24,7 @@ class FakeEngine implements Engine {
     return { fen, depth: opts.depth, lines: this.table[fen] ?? [] };
   }
   stop(): void { this.stops++; }
+  busy(): boolean { return false; }
 }
 
 function deferred<T>() {
@@ -258,15 +259,45 @@ describe('Coach.onUserMove', () => {
   });
 });
 
+describe('Coach analysis cache', () => {
+  it('a take-back and retry reuses the analysis of the position before the move', async () => {
+    const engine = new FakeEngine(knightTable());
+    const coach = new Coach(makeDeps(engine));
+    const game = new GameState('w', KNIGHT_FEN);
+    await coach.onUserMove(game, game.play('f3e5'));
+    expect(engine.calls.map((c) => c.fen)).toEqual([KNIGHT_FEN, KNIGHT_AFTER]);
+    coach.cancelPending();
+    game.takeBackUserMove();
+    await coach.onUserMove(game, game.play('e1e2'));
+    coach.cancelPending();
+    game.takeBackUserMove();
+    await coach.onUserMove(game, game.play('e1d2')); // a second retry still reuses it
+    expect(engine.calls.filter((c) => c.fen === KNIGHT_FEN)).toHaveLength(1);
+    expect(engine.stops).toBe(0);
+  });
+});
+
 describe('Coach.preMove', () => {
-  it('returns null at light and solo without calling the engine', async () => {
+  it('returns null at light and solo, but prefetches the analysis for the user\'s move', async () => {
     for (const level of ['light', 'solo'] as CoachLevel[]) {
       const engine = new FakeEngine(bishopTable());
       const coach = new Coach(makeDeps(engine, { levelFor: () => level }));
       const game = new GameState('b', BISHOP_START, ['c1g5']);
       expect(await coach.preMove(game)).toBeNull();
-      expect(engine.calls).toHaveLength(0);
+      expect(engine.calls.map((c) => c.fen)).toEqual([BISHOP_FEN]);
+      await coach.onUserMove(game, game.play('f6d5'));
+      expect(engine.calls.filter((c) => c.fen === BISHOP_FEN)).toHaveLength(1); // reused, not searched again
     }
+  });
+
+  it('force: true (Ask the coach) gives the message at light, without choices-only extras', async () => {
+    const engine = new FakeEngine(bishopTable());
+    const coach = new Coach(makeDeps(engine, { levelFor: () => 'light' }));
+    const game = new GameState('b', BISHOP_START, ['c1g5']);
+    const m = await coach.preMove(game, { force: true });
+    expect(m?.kind).toBe('pre_move');
+    expect(m?.explanation.whatHappened).toContain('knight on f6');
+    expect(m?.blunderCheck).toBeUndefined();
   });
 
   it('at full gives whatHappened, candidates, arrows and a blunder check', async () => {

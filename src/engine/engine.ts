@@ -4,6 +4,8 @@ import { parseInfo } from './uci';
 export interface Engine {
   analyse(fen: string, opts: { multipv: number; depth: number }): Promise<Analysis>;
   stop(): void;
+  /** True while a search is queued or running (stop() is only needed then). */
+  busy(): boolean;
 }
 
 const DEFAULT_WORKER = `${import.meta.env.BASE_URL}stockfish/stockfish-19-lite-single.js`;
@@ -114,10 +116,12 @@ export function createEngine(workerUrl: string = DEFAULT_WORKER): Engine {
           .then(resolve, reject);
       });
       // Chain on the outer promise so stop() (which rejects it) also unblocks the queue.
-      const settled = outer.then(() => undefined, () => undefined);
-      queue = settled;
-      void settled.then(() => pending.delete(rejectOuter));
+      const done = () => { pending.delete(rejectOuter); };
+      queue = outer.then(done, done);
       return outer;
+    },
+    busy() {
+      return pending.size > 0;
     },
     stop() {
       // Terminate rather than send `stop`: a late `bestmove` from the aborted search

@@ -23,6 +23,8 @@ export interface GameDeps {
   settings: Settings;
   onProfile: (p: ProfileData) => void;
   onSettings: (s: Settings) => void;
+  /** Called when a game is created or finished (the saved-games list changed). */
+  onGameListChanged?: () => void;
   rng: () => number;
   /** Test-only start position; such games are not saved or resumed. */
   startFen?: string;
@@ -68,6 +70,8 @@ export interface GameActions {
   dismissClockSuggestion(): void;
   /** Reveal the current message's choices (they are always visible at full). */
   showChoices(): void;
+  /** "Ask the coach": pre-move coaching on demand, at levels that stay quiet. */
+  askCoach(): void;
 }
 
 const OPPONENT_SEARCH = { depth: 10, multipv: 5 };
@@ -157,16 +161,18 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     d.current.db.saveGame(record).catch(ignore);
   };
 
+  /** Drops in-flight work. The engine is stopped (its worker restarted) only if a search is running. */
   const stopWork = () => {
     gen.current++;
-    try { d.current.engine.stop(); } catch { /* nothing running */ }
+    const { engine } = d.current;
+    try { if (engine.busy()) engine.stop(); } catch { /* nothing running */ }
     d.current.coach.cancelPending();
   };
 
-  const runPreMove = (game: GameState) => {
+  const runPreMove = (game: GameState, force = false) => {
     const g = gen.current;
     const fen = game.fen();
-    d.current.coach.preMove(game).then((m) => {
+    d.current.coach.preMove(game, force ? { force } : undefined).then((m) => {
       if (m && g === gen.current && game.fen() === fen) set({ coachMsg: m });
     }, ignore);
   };
@@ -187,6 +193,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
 
     let games: SavedGame[] = [];
     try { games = await db.listGames(); } catch { /* keep the rating */ }
+    if (!startFen) d.current.onGameListChanged?.();
     const rating = adjustOpponentRating(settings.current.opponentRating, lastFiveScore(games));
     if (rating !== settings.current.opponentRating) setSettings({ ...settings.current, opponentRating: rating });
 
@@ -328,6 +335,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       if (!startFen) {
         db.saveGame({ id, startedAt, userColor: color, moves: [], verdicts: [], result: null })
           .then(() => db.setCurrentGame(id))
+          .then(() => d.current.onGameListChanged?.())
           .catch(ignore);
       }
       load(game, id, startedAt, []);
@@ -403,6 +411,11 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     showChoices() {
       const msg = view.current.coachMsg;
       if (msg) set({ choicesShownFor: msg.id });
+    },
+
+    askCoach() {
+      const { game, phase } = view.current;
+      if (game && phase === 'user') runPreMove(game, true);
     },
   };
 

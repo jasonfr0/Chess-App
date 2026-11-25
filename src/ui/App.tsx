@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Coach } from '../coach/coach';
-import { explainWithClaude, makeClient, type ClaudeClientLike } from '../coach/claude';
+import { createExplainer } from '../coach/claude';
 import { createEngine, type Engine } from '../engine/engine';
 import { levelFor, summary } from '../profile/profile';
 import { openDb, type Db, type Settings } from '../storage/db';
@@ -44,7 +44,6 @@ export function App() {
   const settingsRef = useRef<Settings | null>(null);
   const profileRef = useRef<ProfileData | null>(null);
   const gamesCount = useRef(0);
-  const client = useRef<{ key: string; client: ClaudeClientLike } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,14 +57,7 @@ export function App() {
       const engine = createEngine();
       const coach = new Coach({
         engine,
-        explain: async (packet) => {
-          const { apiKey, model } = settingsRef.current!;
-          if (!apiKey) return null;
-          if (client.current?.key !== apiKey) client.current = { key: apiKey, client: await makeClient(apiKey) };
-          const out = await explainWithClaude(packet, { client: client.current.client, model });
-          setClaudeFailed(out === null);
-          return out;
-        },
+        explain: createExplainer({ settings: () => settingsRef.current!, onOffline: setClaudeFailed }),
         levelFor: (a) => levelFor(profileRef.current!, settingsRef.current!, a),
         profile: () => summary(profileRef.current!, Date.now(), gamesCount.current),
         themeCount: (t) => profileRef.current!.themes[t].count,
@@ -91,6 +83,9 @@ export function App() {
     profileRef.current = p;
     setProfileState(p);
     db.saveProfile(p).catch(() => {});
+  };
+  // The games count (for Claude's profile summary) only changes when a game starts or ends.
+  const onGameListChanged = () => {
     db.listGames().then((g) => { gamesCount.current = g.length; }, () => {});
   };
 
@@ -110,7 +105,7 @@ export function App() {
       <div hidden={tab !== 'play'}>
         <GameScreen
           db={db} engine={engine} coach={coach} profile={profile} settings={settings}
-          onProfile={onProfile} onSettings={onSettings} rng={rng} startFen={startFen}
+          onProfile={onProfile} onSettings={onSettings} onGameListChanged={onGameListChanged} rng={rng} startFen={startFen}
           coachOffline={!settings.apiKey || claudeFailed}
         />
       </div>

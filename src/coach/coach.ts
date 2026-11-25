@@ -25,6 +25,8 @@ export interface CoachDeps {
 }
 
 const ANALYSIS = { depth: 14, multipv: 3 };
+/** Two slots: the position before the user's move and the one after, so a take-back retry reuses the first. */
+const CACHE_SLOTS = 2;
 const CONSEQUENCE_WINDOW = 6;
 const BLUNDER_PROMPT = 'Before you move: what does their last move attack? Is anything of yours undefended?';
 const NAMES: Record<PieceRef['piece'], string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
@@ -91,7 +93,7 @@ export class Coach {
   private nextId = 1;
   private epoch = 0;
   private currentId: string | null = null;
-  private cache: { fen: string; analysis: Promise<Analysis> } | null = null;
+  private cache: { fen: string; analysis: Promise<Analysis> }[] = [];
   private lastMistake: Mistake | null = null;
   private tracker: Tracker | null = null;
 
@@ -107,7 +109,8 @@ export class Coach {
     this.tracker = null;
   }
 
-  async preMove(game: GameState): Promise<CoachMessage | null> {
+  /** `force`: the user tapped "Ask the coach", so coach even at light or solo. */
+  async preMove(game: GameState, opts: { force?: boolean } = {}): Promise<CoachMessage | null> {
     this.currentId = null;
     try {
       const history = game.history();
@@ -116,7 +119,11 @@ export class Coach {
       const fen = game.fen();
       const book = lookup(game.userColor, history.map((m) => m.san));
       const level = this.deps.levelFor(areaOf(fen, history.length, book !== null));
-      if (level === 'light' || level === 'solo') return null;
+      if (!opts.force && (level === 'light' || level === 'solo')) {
+        // Nothing is shown, but the user's move will be judged from this position: start that search now.
+        this.analyse(fen).catch(() => { /* onUserMove retries */ });
+        return null;
+      }
 
       const epoch = this.epoch;
       const plies = history.length;
@@ -273,13 +280,17 @@ export class Coach {
     return `coach-${this.nextId++}`;
   }
 
-  /** One-slot cache of the (possibly in-flight) search, so preMove and onUserMove never search a FEN twice. */
+  /** Small cache of (possibly in-flight) searches, so preMove, onUserMove and a retry never search a FEN twice. */
   private analyse(fen: string): Promise<Analysis> {
-    if (this.cache?.fen === fen) return this.cache.analysis;
+    const hit = this.cache.find((e) => e.fen === fen);
+    if (hit) {
+      this.cache = [...this.cache.filter((e) => e !== hit), hit]; // most recently used last
+      return hit.analysis;
+    }
     const entry = { fen, analysis: this.deps.engine.analyse(fen, ANALYSIS) };
-    this.cache = entry;
+    this.cache = [...this.cache, entry].slice(-CACHE_SLOTS);
     entry.analysis.catch(() => {
-      if (this.cache === entry) this.cache = null; // never reuse a failed or stopped search
+      this.cache = this.cache.filter((e) => e !== entry); // never reuse a failed or stopped search
     });
     return entry.analysis;
   }
