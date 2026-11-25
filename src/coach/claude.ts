@@ -4,7 +4,8 @@ import { z } from 'zod/v4';
 import type { ProfileSummary } from '../types';
 import type { Explanation, MistakeContext, PreMoveContext } from './templates';
 
-export type ModelId = 'claude-sonnet-5-5' | 'claude-opus-5-5' | 'claude-haiku-5-5';
+export const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'] as const;
+export type ModelId = (typeof MODEL_IDS)[number];
 
 export interface FactPacket {
   kind: 'pre_move' | 'mistake';

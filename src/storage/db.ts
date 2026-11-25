@@ -2,7 +2,7 @@ import { openDB, type IDBPDatabase } from 'idb';
 import { z } from 'zod/v4';
 import type { Area, CoachLevel, Color, GameResult, ProfileData, Theme } from '../types';
 import type { Verdict } from '../coach/classify';
-import type { ModelId } from '../coach/claude';
+import { MODEL_IDS, type ModelId } from '../coach/claude';
 
 export interface Settings {
   apiKey: string;
@@ -57,7 +57,7 @@ const areaEnum = z.enum(['opening', 'middlegame', 'endgame']);
 const levelEnum = z.enum(['full', 'guided', 'light', 'solo']);
 const settingsSchema = z.object({
   apiKey: z.string().optional(),
-  model: z.enum(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5']),
+  model: z.enum(MODEL_IDS),
   levelOverride: z.partialRecord(areaEnum, levelEnum),
   clockMinutes: z.number().nullable(),
   opponentRating: z.number(),
@@ -68,12 +68,24 @@ const gameSchema = z.object({
   userColor: z.enum(['w', 'b']),
   moves: z.array(z.string()),
   verdicts: z.array(z.looseObject({})),
-  result: z.looseObject({}).nullable(),
+  result: z.object({
+    winner: z.enum(['w', 'b']).nullable(),
+    reason: z.enum(['checkmate', 'stalemate', 'repetition', 'fifty_move', 'insufficient', 'resign', 'timeout']),
+  }).nullable(),
 });
+const themeStatSchema = z.looseObject({
+  count: z.number(),
+  lastSeen: z.number(),
+  examples: z.array(z.looseObject({ gameId: z.string(), ply: z.number(), fen: z.string() })),
+});
+const moveRecordSchema = z.looseObject({ good: z.boolean(), flagged: z.boolean(), at: z.number() });
 const profileSchema = z.looseObject({
-  themes: z.record(z.string(), z.looseObject({})),
-  moves: z.looseObject({ opening: z.array(z.looseObject({})), middlegame: z.array(z.looseObject({})), endgame: z.array(z.looseObject({})) }),
+  themes: z.record(z.string(), themeStatSchema),
+  moves: z.looseObject({
+    opening: z.array(moveRecordSchema), middlegame: z.array(moveRecordSchema), endgame: z.array(moveRecordSchema),
+  }),
   levels: z.record(areaEnum, levelEnum),
+  levelChangedAt: z.partialRecord(areaEnum, z.number()).optional(),
 });
 const backupSchema = z.object({
   app: z.literal('chess-coach'),
@@ -136,15 +148,21 @@ export async function openDb(name = 'chess-coach'): Promise<Db> {
       const b = parsed.data;
       const existing = await getSettings(); // read before the transaction; keeps local apiKey
       const tx = d.transaction(['games', 'kv'], 'readwrite');
+      const games = tx.objectStore('games');
+      const kv = tx.objectStore('kv');
+      const currentId = b.currentGameId && b.games.some((g) => g.id === b.currentGameId) ? b.currentGameId : null;
+      const pending: Promise<unknown>[] = [tx.done];
       try {
-        await tx.objectStore('games').clear();
-        for (const g of b.games) await tx.objectStore('games').put(g);
-        const kv = tx.objectStore('kv');
-        if (b.settings) await kv.put({ ...DEFAULT_SETTINGS, ...b.settings, apiKey: existing.apiKey }, 'settings');
-        await kv.put(b.currentGameId ?? null, 'currentGameId');
-        if (b.profile) await kv.put(b.profile, 'profile');
-        await tx.done;
+        // Every request promise and tx.done are collected and awaited together, so a failure
+        // (even a synchronous throw mid-way) never leaves an unhandled rejection behind.
+        pending.push(games.clear());
+        for (const g of b.games) pending.push(games.put(g));
+        if (b.settings) pending.push(kv.put({ ...DEFAULT_SETTINGS, ...b.settings, apiKey: existing.apiKey }, 'settings'));
+        pending.push(kv.put(currentId, 'currentGameId'));
+        if (b.profile) pending.push(kv.put(b.profile, 'profile'));
+        await Promise.all(pending);
       } catch (e) {
+        for (const p of pending) p.catch(() => {});
         try { tx.abort(); } catch { /* already finished */ }
         throw new ImportError('Import failed: ' + (e instanceof Error ? e.message : String(e)));
       }

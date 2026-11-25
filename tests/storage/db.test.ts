@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { openDb, DEFAULT_SETTINGS, ImportError, defaultProfile, type SavedGame } from '../../src/storage/db';
 
 let n = 0;
@@ -66,5 +66,57 @@ describe('db', () => {
       await expect(db.importAll(bad)).rejects.toBeInstanceOf(ImportError);
     }
     expect((await db.listGames()).map((g) => g.id)).toEqual(['g1']);
+  });
+
+  it('rejects malformed profile entries and leaves data untouched', async () => {
+    const db = await openDb(fresh());
+    await db.saveGame(game('g1'));
+    const p = defaultProfile();
+    const mk = (mut: (x: any) => void) => { const c = JSON.parse(JSON.stringify(p)); mut(c); return JSON.stringify({ app: 'chess-coach', version: 1, games: [], profile: c }); };
+    const bads = [
+      mk((c) => { c.themes.allowed_fork = {}; }),
+      mk((c) => { c.themes.allowed_fork.examples = [{ gameId: 1 }]; }),
+      mk((c) => { c.moves.opening = [{ good: 'yes' }]; }),
+      mk((c) => { c.levelChangedAt = { opening: 'x' }; }),
+    ];
+    for (const bad of bads) await expect(db.importAll(bad)).rejects.toBeInstanceOf(ImportError);
+    expect((await db.listGames()).map((g) => g.id)).toEqual(['g1']);
+  });
+
+  it('rejects invalid game result and model', async () => {
+    const db = await openDb(fresh());
+    const g = { ...game('x'), result: { winner: 'q', reason: 'nope' } };
+    await expect(db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [g] }))).rejects.toBeInstanceOf(ImportError);
+    const ok = { ...game('x'), result: { winner: null, reason: 'stalemate' } };
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [ok] }));
+    expect((await db.getGame('x'))?.result?.reason).toBe('stalemate');
+  });
+
+  it('nulls an imported currentGameId not among imported games', async () => {
+    const db = await openDb(fresh());
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [game('a')], currentGameId: 'zzz' }));
+    expect(await db.currentGameId()).toBeNull();
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [game('a')], currentGameId: 'a' }));
+    expect(await db.currentGameId()).toBe('a');
+  });
+
+  it('is atomic when a write fails mid-import', async () => {
+    const db = await openDb(fresh());
+    await db.saveGame(game('old'));
+    await db.saveSettings({ ...DEFAULT_SETTINGS, opponentRating: 777 });
+    const p = defaultProfile(); p.themes.missed_pin.count = 4;
+    await db.saveProfile(p);
+    const json = JSON.stringify({ app: 'chess-coach', version: 1, games: [game('new')], settings: DEFAULT_SETTINGS, profile: defaultProfile() });
+    const orig = IDBObjectStore.prototype.put;
+    let calls = 0;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, ...a: Parameters<IDBObjectStore['put']>) {
+      if (++calls === 2) throw new Error('boom');
+      return orig.apply(this, a);
+    });
+    await expect(db.importAll(json)).rejects.toBeInstanceOf(ImportError);
+    spy.mockRestore();
+    expect((await db.listGames()).map((g) => g.id)).toEqual(['old']);
+    expect((await db.getSettings()).opponentRating).toBe(777);
+    expect((await db.getProfile()).themes.missed_pin.count).toBe(4);
   });
 });
