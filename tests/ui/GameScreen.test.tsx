@@ -228,7 +228,7 @@ describe('GameScreen', () => {
     drop('h5', 'f7');
     const recap = await screen.findByRole('region', { name: /game over/i });
     await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
-    expect(recap).not.toHaveTextContent(/spotting threats/);
+    expect(recap).not.toHaveTextContent(/avoiding mistakes|spotting threats/);
     expect(recap).not.toHaveTextContent(/clock/);
   });
 
@@ -307,5 +307,32 @@ describe('GameScreen', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Resign' }));
     await waitFor(() => expect(onGameListChanged).toHaveBeenCalledTimes(2));
+  });
+
+  it('a retry after Hint 3 (which names the move) counts as assisted; one after Hint 2 does not', async () => {
+    for (const hintsTaken of [2, 3]) {
+      cleanup();
+      const coach = fakeCoach();
+      const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
+        recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] };
+      const mistake: CoachMessage = { id: 'm1', kind: 'mistake', source: 'template', arrows: [], verdict,
+        explanation: { whatHappened: 'Bad.', better: 'The better move was d4.', lesson: 'Look first.' } };
+      const ok = coach.onUserMove;
+      coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
+      coach.hint = vi.fn((step: 1 | 2 | 3) => `hint ${step}`);
+      const { onProfile } = await setup(undefined, { coach });
+      fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      drop('e2', 'e4');
+      fireEvent.click(await screen.findByRole('button', { name: 'Take it back' }));
+      for (let h = 1; h <= hintsTaken; h++) {
+        fireEvent.click(await screen.findByRole('button', { name: `Hint ${h}` }));
+        await screen.findByText(`hint ${h}`);
+      }
+      onProfile.mockClear();
+      drop('d2', 'd4');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBe(hintsTaken === 3 ? true : undefined);
+    }
   });
 });

@@ -354,7 +354,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const msg = v.coachMsg;
       const visible = msg !== null &&
         (levelAt(game, profile.current, settings.current) === 'full' || v.choicesShownFor === msg.id);
-      const assisted = shownMoves(msg, visible).includes(uci.slice(0, 4));
+      // Hint 3 names the move outright, so whatever is played after it is not found on one's own.
+      const assisted = shownMoves(msg, visible).includes(uci.slice(0, 4)) || (v.hints?.length ?? 0) >= 3;
       let move;
       try { move = game.play(uci); } catch { return false; }
       set({ phase: 'checking', coachMsg: null, consequence: null, hints: null, choicesShownFor: null });

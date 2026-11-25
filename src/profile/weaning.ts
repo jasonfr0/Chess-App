@@ -27,12 +27,20 @@ export function reviewLevels(p: ProfileData): { profile: ProfileData; changes: L
     const changedAt = levelChangedAt[area];
     const sinceChange = recs.length - (changedAt ?? -Infinity);
     const last20 = recs.slice(-UP_WINDOW);
-    // Both windows must consist only of post-change records, so repeated reviews can't cascade.
-    // Step-ups count every move (copied ones too); step-downs judge only independent moves.
+    // Every window consists only of post-change records, so repeated reviews can't cascade.
+    // Step-ups count every move (copied ones too).
     if (sinceChange >= UP_WINDOW && last20.length === UP_WINDOW && last20.filter(isBad).length * 4 >= UP_WINDOW) {
       // At 'full' (idx 0) there is nothing to step up to; stay put and skip the step-down check.
       if (idx > 0) to = ORDER[idx - 1];
+    } else if (idx === 0) {
+      // At full the choices are always on screen, so most good moves are "assisted". Judge every move:
+      // step down when at most 10% of the last 40 (all post-change) were bad.
+      const last40 = recs.slice(-DOWN_WINDOW);
+      if (last40.length === DOWN_WINDOW && sinceChange >= DOWN_WINDOW && last40.filter(isBad).length * 10 <= DOWN_WINDOW) {
+        to = ORDER[1];
+      }
     } else {
+      // Below full, only moves found without the coach's choices count (assisted moves excluded).
       const own = recs.slice(changedAt ?? 0).filter((m) => !m.assisted).slice(-DOWN_WINDOW);
       if (
         own.length === DOWN_WINDOW &&
@@ -54,9 +62,9 @@ export function levelChangeText(c: LevelChange): string {
   const where = AREA_WORDS[c.area];
   if (ORDER.indexOf(c.to) > ORDER.indexOf(c.from)) {
     const praise = `You've been spotting threats well in ${where}.`;
+    if (c.to === 'guided') return `You've been avoiding mistakes in ${where}. I'll hide your choices there — tap Show choices if you want them.`;
     if (c.to === 'light') return `${praise} I'll stay quiet unless you tap Ask the coach.`;
-    if (c.to === 'solo') return `${praise} Only a short recap at the end of each game.`;
-    return `${praise} I'll stop showing your choices there — tap the coach if you want them.`;
+    return `${praise} Only a short recap at the end of each game.`;
   }
   return `A few more slips lately in ${where} — I'll show your choices again for a while.`;
 }

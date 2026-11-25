@@ -97,21 +97,48 @@ describe('weaning', () => {
     expect(reviewLevels(p).profile.levels.opening).toBe('full');
   });
 
-  it('assisted moves do not count towards stepping down', () => {
-    let p = emptyProfile();
+  const atGuided = (): ProfileData => ({ ...emptyProfile(), levels: { ...emptyProfile().levels, middlegame: 'guided' } });
+
+  it('below full, assisted moves do not count towards stepping down', () => {
+    let p = atGuided();
     for (let i = 0; i < 60; i++) p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: i, assisted: true });
     for (let i = 0; i < 39; i++) p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: 100 + i });
     expect(reviewLevels(p).changes).toEqual([]);
     p = recordMove(p, v('middlegame'), { gameId: 'g', ply: 40, fen: 'f', at: 200 });
-    expect(reviewLevels(p).profile.levels.middlegame).toBe('guided');
+    expect(reviewLevels(p).profile.levels.middlegame).toBe('light');
   });
 
-  it('assisted moves interleaved with independent ones: only independent ones are judged', () => {
-    let p = emptyProfile();
+  it('below full, with assisted moves interleaved only independent ones are judged', () => {
+    let p = atGuided();
     for (let i = 0; i < 80; i++) {
       p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: i, assisted: i % 2 === 0 });
     }
-    expect(reviewLevels(p).profile.levels.middlegame).toBe('guided');
+    expect(reviewLevels(p).profile.levels.middlegame).toBe('light');
+  });
+
+  describe('full -> guided judges every move (choices are always shown at full)', () => {
+    const fullWith = (n: number, bad: (i: number) => boolean) => {
+      let p = emptyProfile();
+      for (let i = 0; i < n; i++) {
+        const verdict: Verdict = { ...v('middlegame'), severity: bad(i) ? 'mistake' : 'ok', cpLoss: bad(i) ? 200 : 0 };
+        p = recordMove(p, verdict, { gameId: 'g', ply: i, fen: 'f', at: i, assisted: true });
+      }
+      return p;
+    };
+
+    it('40 assisted moves with 10% bad step down to guided', () => {
+      const r = reviewLevels(fullWith(40, (i) => i % 10 === 0)); // 4 bad
+      expect(r.changes).toEqual([{ area: 'middlegame', from: 'full', to: 'guided' }]);
+    });
+    it('more than 10% bad gives no step down', () => {
+      expect(reviewLevels(fullWith(40, (i) => i < 20 && i % 4 === 0)).changes).toEqual([]); // 5 bad, none in the last 20
+    });
+    it('needs 40 records since the last change', () => {
+      expect(reviewLevels(fullWith(39, () => false)).changes).toEqual([]);
+      const p = fullWith(60, () => false);
+      expect(reviewLevels({ ...p, levelChangedAt: { middlegame: 21 } }).changes).toEqual([]);
+      expect(reviewLevels({ ...p, levelChangedAt: { middlegame: 20 } }).profile.levels.middlegame).toBe('guided');
+    });
   });
 
   it('assisted bad moves still count towards stepping up', () => {
@@ -125,7 +152,7 @@ describe('weaning', () => {
 
   it('copy', () => {
     expect(levelChangeText({ area: 'middlegame', from: 'full', to: 'guided' })).toBe(
-      "You've been spotting threats well in the middlegame. I'll stop showing your choices there — tap the coach if you want them.");
+      "You've been avoiding mistakes in the middlegame. I'll hide your choices there — tap Show choices if you want them.");
     expect(levelChangeText({ area: 'opening', from: 'guided', to: 'full' })).toBe(
       "A few more slips lately in the opening — I'll show your choices again for a while.");
     expect(levelChangeText({ area: 'endgame', from: 'solo', to: 'light' })).toBe(
