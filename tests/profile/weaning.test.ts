@@ -53,6 +53,23 @@ describe('weaning', () => {
     expect(r.changes).toEqual([{ area: 'opening', from: 'guided', to: 'full' }]);
   });
 
+  it('step-up is idempotent: repeated reviews give exactly one step', () => {
+    const p = fill('opening', 20, 4);
+    const start: ProfileData = { ...p, levels: { ...p.levels, opening: 'solo' } };
+    const r1 = reviewLevels(start);
+    expect(r1.profile.levels.opening).toBe('light');
+    const r2 = reviewLevels(r1.profile);
+    expect(r2.changes).toEqual([]);
+    expect(r2.profile.levels.opening).toBe('light');
+  });
+
+  it('steps up again only after 20 further records', () => {
+    const p = fill('opening', 20, 4);
+    let cur = reviewLevels({ ...p, levels: { ...p.levels, opening: 'solo' } }).profile;
+    for (let i = 0; i < 20; i++) cur = recordMove(cur, v('opening', i % 4 === 0), { gameId: 'g', ply: i, fen: 'f', at: 50 + i });
+    expect(reviewLevels(cur).profile.levels.opening).toBe('guided');
+  });
+
   it('never steps past full or solo', () => {
     expect(reviewLevels(fill('opening', 20, 4)).changes).toEqual([]);
     const p = fill('endgame', 80);

@@ -21,7 +21,7 @@ export function recordMove(
 
   let levelChangedAt = p.levelChangedAt;
   if (trimmed > 0 && levelChangedAt?.[v.area] !== undefined) {
-    levelChangedAt = { ...levelChangedAt, [v.area]: levelChangedAt[v.area]! - trimmed };
+    levelChangedAt = { ...levelChangedAt, [v.area]: Math.max(0, levelChangedAt[v.area]! - trimmed) };
   }
 
   let themes = p.themes;

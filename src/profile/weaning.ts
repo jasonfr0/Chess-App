@@ -19,12 +19,14 @@ export function reviewLevels(p: ProfileData): { profile: ProfileData; changes: L
     const idx = ORDER.indexOf(from);
     let to: CoachLevel | null = null;
 
+    const sinceChange = recs.length - (levelChangedAt[area] ?? -Infinity);
     const last20 = recs.slice(-UP_WINDOW);
-    if (last20.length === UP_WINDOW && last20.filter((m) => m.flagged).length * 4 >= UP_WINDOW) {
+    // The step-up window must consist only of post-change records, so repeated reviews can't cascade.
+    if (sinceChange >= UP_WINDOW && last20.length === UP_WINDOW && last20.filter((m) => m.flagged).length * 4 >= UP_WINDOW) {
+      // At 'full' (idx 0) there is nothing to step up to; stay put and skip the step-down check.
       if (idx > 0) to = ORDER[idx - 1];
     } else {
       const last40 = recs.slice(-DOWN_WINDOW);
-      const sinceChange = recs.length - (levelChangedAt[area] ?? -Infinity);
       if (
         last40.length === DOWN_WINDOW && sinceChange >= DOWN_WINDOW &&
         last40.filter((m) => m.good).length * 5 >= DOWN_WINDOW * 4 && idx < ORDER.length - 1

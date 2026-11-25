@@ -50,6 +50,13 @@ describe('profile', () => {
     expect(p.levelChangedAt?.middlegame).toBe(145);
   });
 
+  it('clamps a trim-shifted levelChangedAt at 0', () => {
+    let p = emptyProfile();
+    p = { ...p, levelChangedAt: { middlegame: 2 } };
+    for (let i = 0; i < 205; i++) p = recordMove(p, v(), ctx(i));
+    expect(p.levelChangedAt?.middlegame).toBe(0);
+  });
+
   it('summary orders themes by count, top 3, last 30 days only', () => {
     const day = 86_400_000;
     const now = 100 * day;
