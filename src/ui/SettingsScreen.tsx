@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import Anthropic from '@anthropic-ai/sdk';
 import type { ModelId } from '../coach/claude';
 import type { Db, Settings } from '../storage/db';
 import type { Area, CoachLevel, ProfileData } from '../types';
@@ -18,6 +17,7 @@ const CLOCKS: (number | null)[] = [null, 10, 15, 30];
 /** One tiny plain-text request to check the key works. */
 async function testKey(apiKey: string, model: ModelId): Promise<string> {
   try {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
     await client.messages.create({
       model,

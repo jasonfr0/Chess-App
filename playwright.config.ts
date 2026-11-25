@@ -6,14 +6,14 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: 'http://localhost:4173/Chess-App/',
     viewport: { width: 360, height: 740 },
     deviceScaleFactor: 1,
     trace: 'off',
   },
   webServer: {
     command: 'npm run build && npx vite preview --port 4173 --strictPort',
-    url: 'http://localhost:4173',
+    url: 'http://localhost:4173/Chess-App/',
     reuseExistingServer: false,
     timeout: 120_000,
   },

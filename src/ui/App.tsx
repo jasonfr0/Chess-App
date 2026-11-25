@@ -61,7 +61,7 @@ export function App() {
         explain: async (packet) => {
           const { apiKey, model } = settingsRef.current!;
           if (!apiKey) return null;
-          if (client.current?.key !== apiKey) client.current = { key: apiKey, client: makeClient(apiKey) };
+          if (client.current?.key !== apiKey) client.current = { key: apiKey, client: await makeClient(apiKey) };
           const out = await explainWithClaude(packet, { client: client.current.client, model });
           setClaudeFailed(out === null);
           return out;

@@ -12,7 +12,7 @@ async function tapMove(page: Page, from: string, to: string) {
 }
 
 test('plays a coached game, resumes after reload, fits a 360px screen', async ({ page }) => {
-  await page.goto('/?seed=7');
+  await page.goto('./?seed=7');
   await page.getByRole('button', { name: 'White', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Your move.' })).toBeVisible();
 
@@ -35,7 +35,7 @@ test('plays a coached game, resumes after reload, fits a 360px screen', async ({
 });
 
 test('stops on a hanging move and takes it back', async ({ page }) => {
-  await page.goto(`/?seed=7&fen=${encodeURIComponent(HANGING_FEN)}`);
+  await page.goto(`./?seed=7&fen=${encodeURIComponent(HANGING_FEN)}`);
   await page.getByRole('button', { name: 'White', exact: true }).click();
   await expect.poll(() => boardFen(page)).toBe(HANGING_FEN);
 

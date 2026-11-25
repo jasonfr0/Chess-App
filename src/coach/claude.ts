@@ -1,5 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod/v4';
 import type { ProfileSummary } from '../types';
 import type { Explanation, MistakeContext, PreMoveContext } from './templates';
@@ -128,6 +126,8 @@ export async function explainWithClaude(
   opts.signal?.addEventListener('abort', onAbort);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const { betaZodOutputFormat } = await import('@anthropic-ai/sdk/helpers/beta/zod');
+    if (ctrl.signal.aborted) return null; // aborted while the helper was loading
     const req: Record<string, unknown> = {
       model: opts.model,
       max_tokens: 2000,
@@ -160,6 +160,8 @@ export async function explainWithClaude(
   }
 }
 
-export function makeClient(apiKey: string): ClaudeClientLike {
+/** The SDK is loaded on first use so it stays out of the main bundle. */
+export async function makeClient(apiKey: string): Promise<ClaudeClientLike> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
   return new Anthropic({ apiKey, dangerouslyAllowBrowser: true }) as unknown as ClaudeClientLike;
 }
