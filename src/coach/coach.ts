@@ -43,16 +43,18 @@ function balance(fen: string, color: Color): number {
   return color === 'w' ? m.w - m.b : m.b - m.w;
 }
 
-function fenAfterLine(fen: string, uci: string[]): string {
+/** Plays `uci` from `fen` up to the first unplayable move; SANs and end FEN come from the same replay. */
+function replayLine(fen: string, uci: string[]): { sans: string[]; fen: string } {
   const c = new Chess(fen);
+  const sans: string[] = [];
   for (const u of uci) {
     try {
-      c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
+      sans.push(c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san);
     } catch {
       break;
     }
   }
-  return c.fen();
+  return { sans, fen: c.fen() };
 }
 
 function stubVerdict(fenBefore: string, move: PlayedMove, plyCount: number, inBook: boolean): Verdict {
@@ -64,22 +66,32 @@ function stubVerdict(fenBefore: string, move: PlayedMove, plyCount: number, inBo
   };
 }
 
-/** The user's piece the refutation's first move captures, if the facts list it as hanging. */
-function lostPiece(move: PlayedMove, refutationUci: string[]): PieceRef | null {
+/**
+ * The user's piece the refutation's first move targets, if the facts listed it as hanging AND one of
+ * the opponent's moves since the mistake actually captured it on that square.
+ */
+function lostPiece(move: PlayedMove, refutationUci: string[], since: PlayedMove[]): PieceRef | null {
   const dest = refutationUci[0]?.slice(2, 4);
   if (!dest) return null;
-  return positionFacts(move.fenAfter).hanging.find((p) => p.color === move.color && p.square === dest) ?? null;
+  const piece = positionFacts(move.fenAfter).hanging.find((p) => p.color === move.color && p.square === dest);
+  if (!piece) return null;
+  const captured = since.some((m) => {
+    if (m.color === move.color || m.uci.slice(2, 4) !== dest) return false;
+    const there = new Chess(m.fenBefore).get(dest as Square);
+    return there?.type === piece.piece && there.color === piece.color;
+  });
+  return captured ? piece : null;
 }
 
 interface Mistake { verdict: Verdict; move: PlayedMove; refutationUci: string[]; plyAfter: number }
-interface Tracker { mistake: Mistake; opponentSans: string[]; gain: number; balanceAtMistake: number }
+interface Tracker { mistake: Mistake; lineSans: string[]; opponentSans: string[]; gain: number; balanceAtMistake: number }
 
 export class Coach {
   private listeners: ((m: CoachMessage) => void)[] = [];
   private nextId = 1;
   private epoch = 0;
   private currentId: string | null = null;
-  private cache: Analysis | null = null;
+  private cache: { fen: string; analysis: Promise<Analysis> } | null = null;
   private lastMistake: Mistake | null = null;
   private tracker: Tracker | null = null;
 
@@ -107,8 +119,10 @@ export class Coach {
       if (level === 'light' || level === 'solo') return null;
 
       const epoch = this.epoch;
+      const plies = history.length;
       const analysis = await this.analyse(fen);
-      if (epoch !== this.epoch) return null;
+      // Cancelled, or the user already moved (or took back) while the engine was thinking.
+      if (epoch !== this.epoch || game.fen() !== fen || game.history().length !== plies) return null;
 
       const facts = positionFacts(fen);
       const ctx: PreMoveContext = { fen, lastMove, facts, analysis, book, level };
@@ -140,12 +154,14 @@ export class Coach {
     try {
       const level = this.deps.levelFor(areaOf(move.fenBefore, index, inBook));
       const beforeAnalysis = await this.analyse(move.fenBefore);
+      if (epoch !== this.epoch) return stub;
       const afterAnalysis = await this.analyse(move.fenAfter);
       const verdict = classifyMove({
         fenBefore: move.fenBefore, move, before: beforeAnalysis, after: afterAnalysis,
         history: before, level, plyCount: index, inBook,
       });
-      if (!verdict.flagged || epoch !== this.epoch) return { verdict, message: null };
+      if (epoch !== this.epoch) return stub;
+      if (!verdict.flagged) return { verdict, message: null };
 
       const refutationUci = afterAnalysis.lines[0]?.uci.slice(0, 4) ?? [];
       const ctx: MistakeContext = {
@@ -185,12 +201,13 @@ export class Coach {
   playOn(): void {
     const m = this.lastMistake;
     if (!m) return;
-    const sans = m.verdict.refutationSan;
+    const line = replayLine(m.move.fenAfter, m.refutationUci);
     const balanceAtMistake = balance(m.move.fenAfter, m.move.color);
-    const gain = balanceAtMistake - balance(fenAfterLine(m.move.fenAfter, m.refutationUci), m.move.color);
+    const gain = balanceAtMistake - balance(line.fen, m.move.color);
     this.tracker = {
       mistake: m,
-      opponentSans: sans.filter((_, i) => i % 2 === 0), // the refutation starts with their reply
+      lineSans: line.sans,
+      opponentSans: line.sans.filter((_, i) => i % 2 === 0), // the refutation starts with their reply
       gain,
       balanceAtMistake,
     };
@@ -213,11 +230,11 @@ export class Coach {
 
     this.tracker = null;
     const { verdict, move, refutationUci } = t.mistake;
-    const piece = lostPiece(move, refutationUci);
+    const piece = lostPiece(move, refutationUci, since);
     const lead = piece ? `Here's where leaving ${yours(piece)} costs you.` : `Here's where ${move.san} costs you.`;
     const detail = lineMatched
       ? `They played ${joinList(t.opponentSans)}, just as the coach showed after ${move.san}.`
-      : `You have now lost the material the coach's line after ${move.san} showed (${verdict.refutationSan.join(', ')}).`;
+      : `You have now lost the material the coach's line after ${move.san} showed (${t.lineSans.join(', ')}).`;
     const lesson = THEME_LESSONS[verdict.theme];
     return {
       id: this.newId(), kind: 'consequence', arrows: [], source: 'template', verdict,
@@ -256,11 +273,15 @@ export class Coach {
     return `coach-${this.nextId++}`;
   }
 
-  private async analyse(fen: string): Promise<Analysis> {
-    if (this.cache?.fen === fen) return this.cache;
-    const a = await this.deps.engine.analyse(fen, ANALYSIS);
-    this.cache = a;
-    return a;
+  /** One-slot cache of the (possibly in-flight) search, so preMove and onUserMove never search a FEN twice. */
+  private analyse(fen: string): Promise<Analysis> {
+    if (this.cache?.fen === fen) return this.cache.analysis;
+    const entry = { fen, analysis: this.deps.engine.analyse(fen, ANALYSIS) };
+    this.cache = entry;
+    entry.analysis.catch(() => {
+      if (this.cache === entry) this.cache = null; // never reuse a failed or stopped search
+    });
+    return entry.analysis;
   }
 
   /** Makes `message` current and upgrades it in the background if Claude returns a valid explanation. */
@@ -286,20 +307,21 @@ function blunderAnswer(fen: string, lastMove: PlayedMove): string {
   const facts = positionFacts(fen);
   const to = lastMove.uci.slice(2, 4);
   const mover = new Chess(fen).get(to as Square);
-  const attacker = mover ? `Their ${NAMES[mover.type]} on ${to}` : 'Their last move';
-  const attacked = facts.attackedBy(lastMove.uci).filter((p) => p.color === me);
-  const targets = attacked.filter((p) => p.piece !== 'k');
-  const check = attacked.some((p) => p.piece === 'k');
+  const attacker = mover ? `Their ${NAMES[mover.type]} on ${to}` : null;
+  // attackedBy covers only the moved piece; check comes from the position itself (discovered checks too).
+  const targets = facts.attackedBy(lastMove.uci).filter((p) => p.color === me && p.piece !== 'k');
   const hanging = facts.hanging.filter((p) => p.color === me);
   const isHanging = (p: PieceRef) => hanging.some((h) => h.square === p.square);
 
   const parts: string[] = [];
-  if (check) parts.push(`${attacker} gives check.`);
-  if (targets.length > 0) {
+  if (facts.inCheck) parts.push('You are in check.');
+  if (attacker && targets.length > 0) {
     const list = targets.map((p) => `${yours(p)}${isHanging(p) ? ', which is not safely protected' : ''}`);
     parts.push(`${attacker} now attacks ${joinList(list)}.`);
+  } else if (attacker) {
+    // Only the moved piece is checked here; a discovered attack shows up in the hanging sentence below.
+    parts.push(`${attacker} does not attack anything of yours.`);
   }
-  if (!check && targets.length === 0) parts.push('Their last move does not attack anything of yours.');
   const others = hanging.filter((h) => !targets.some((t) => t.square === h.square));
   if (others.length > 0) {
     parts.push(`${joinList(others.map(yours)).replace(/^your/, 'Your')} ${others.length === 1 ? 'is' : 'are'} under attack and not safely protected.`);

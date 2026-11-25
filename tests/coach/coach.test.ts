@@ -14,11 +14,14 @@ const line = (uci: string[], cp: number | null, mate: number | null = null): Eng
 class FakeEngine implements Engine {
   calls: { fen: string; multipv: number; depth: number }[] = [];
   stops = 0;
+  /** When `gate` is set, every search waits for it before answering. */
+  gate: Promise<void> | null = null;
   constructor(private table: Record<string, EngineLine[]>, private reject = false) {}
-  analyse(fen: string, opts: { multipv: number; depth: number }): Promise<Analysis> {
+  async analyse(fen: string, opts: { multipv: number; depth: number }): Promise<Analysis> {
     this.calls.push({ fen, ...opts });
-    if (this.reject) return Promise.reject(new Error('stopped'));
-    return Promise.resolve({ fen, depth: opts.depth, lines: this.table[fen] ?? [] });
+    if (this.gate) await this.gate;
+    if (this.reject) throw new Error('stopped');
+    return { fen, depth: opts.depth, lines: this.table[fen] ?? [] };
   }
   stop(): void { this.stops++; }
 }
@@ -123,9 +126,13 @@ describe('Coach.onUserMove', () => {
 
   it('keeps the template when explain resolves null', async () => {
     const updates: CoachMessage[] = [];
-    const { coach, result } = await knightBlunder({ explain: () => Promise.resolve(null) });
+    const explain = vi.fn(() => Promise.resolve(null));
+    const coach = new Coach(makeDeps(new FakeEngine(knightTable()), { explain }));
     coach.onUpdate((m) => updates.push(m));
+    const game = new GameState('w', KNIGHT_FEN);
+    const result = await coach.onUserMove(game, game.play('f3e5'));
     await flush();
+    expect(explain).toHaveBeenCalledTimes(1);
     expect(result.message?.source).toBe('template');
     expect(updates).toHaveLength(0);
   });
@@ -158,6 +165,24 @@ describe('Coach.onUserMove', () => {
     d.resolve({ whatHappened: 'late' });
     await flush();
     expect(updates).toHaveLength(0);
+  });
+
+  it('cancelPending while the engine is thinking: no message, no explain, no second search', async () => {
+    const engine = new FakeEngine(knightTable());
+    const gate = deferred<void>();
+    engine.gate = gate.promise;
+    const explain = vi.fn(() => Promise.resolve(null));
+    const coach = new Coach(makeDeps(engine, { explain }));
+    const game = new GameState('w', KNIGHT_FEN);
+    const pending = coach.onUserMove(game, game.play('f3e5'));
+    coach.cancelPending();
+    gate.resolve();
+    const { verdict, message } = await pending;
+    await flush();
+    expect(message).toBeNull();
+    expect(verdict.flagged).toBe(false);
+    expect(explain).not.toHaveBeenCalled();
+    expect(engine.calls.map((c) => c.fen)).toEqual([KNIGHT_FEN]);
   });
 
   it('resolves with an unflagged stub and no message when the engine rejects', async () => {
@@ -281,6 +306,47 @@ describe('Coach.preMove', () => {
     expect(explain.mock.calls[0][0].facts.book).not.toBeNull();
   });
 
+  it('blunder check after a discovered check does not over-claim', async () => {
+    // Ne4-c5 uncovers the e1 rook's check on the e8 king; the knight itself attacks nothing.
+    const game = new GameState('b', '4k3/8/8/8/4N3/8/8/4R1K1 w - - 0 1', ['e4c5']);
+    const engine = new FakeEngine({ [game.fen()]: [line(['e8f7'], -500)] });
+    const m = await new Coach(makeDeps(engine)).preMove(game);
+    expect(m?.blunderCheck?.answer).toBe(
+      'You are in check. Their knight on c5 does not attack anything of yours. ' +
+        'Nothing of yours is under attack without protection.',
+    );
+  });
+
+  it('blunder check after a discovered attack names the exposed piece', async () => {
+    // Be4-b1 uncovers the e1 rook's attack on the undefended e7 rook.
+    const game = new GameState('b', 'k7/4r3/8/8/4B3/8/8/4R1K1 w - - 0 1', ['e4b1']);
+    const engine = new FakeEngine({ [game.fen()]: [line(['e7e1'], 0)] });
+    const answer = (await new Coach(makeDeps(engine)).preMove(game))?.blunderCheck?.answer ?? '';
+    expect(answer).not.toContain('Their last move does not attack');
+    expect(answer).toBe(
+      'Their bishop on b1 does not attack anything of yours. Your rook on e7 is under attack and not safely protected.',
+    );
+  });
+
+  it('returns null if the user moves while the engine is thinking, and shares the search', async () => {
+    const after = '4k3/8/8/3n2B1/8/8/8/4K3 w - - 2 2';
+    const engine = new FakeEngine({ ...bishopTable(), [after]: [line(['g5d2'], 0)] });
+    const gate = deferred<void>();
+    engine.gate = gate.promise;
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const coach = new Coach(makeDeps(engine, { explain }));
+    const game = new GameState('b', BISHOP_START, ['c1g5']);
+    const pre = coach.preMove(game);
+    const move = game.play('f6d5');
+    const user = coach.onUserMove(game, move);
+    gate.resolve();
+    expect(await pre).toBeNull();
+    await user;
+    await flush();
+    expect(engine.calls.map((c) => c.fen)).toEqual([BISHOP_FEN, after]);
+    expect(explain).not.toHaveBeenCalled();
+  });
+
   it('returns null when the engine rejects', async () => {
     const coach = new Coach(makeDeps(new FakeEngine({}, true)));
     const game = new GameState('b', BISHOP_START, ['c1g5']);
@@ -351,6 +417,21 @@ describe('Coach consequence tracker', () => {
     const m = coach.checkConsequence(game);
     expect(m?.kind).toBe('consequence');
     expect(coach.checkConsequence(game)).toBeNull();
+  });
+
+  it('does not name the piece when material is lost without that piece being taken on its square', async () => {
+    const { coach, game } = await knightBlunder();
+    coach.playOn();
+    // Kd8, then the knight wanders to c6 and is taken there instead of on e5.
+    for (const uci of ['e8d8', 'e5c6', 'd8c7', 'e1e2']) {
+      game.play(uci);
+      expect(coach.checkConsequence(game)).toBeNull();
+    }
+    game.play('c7c6');
+    const m = coach.checkConsequence(game);
+    expect(m?.kind).toBe('consequence');
+    expect(m?.explanation.whatHappened).toContain("Here's where Ne5 costs you.");
+    expect(m?.explanation.whatHappened).not.toContain('your knight on e5');
   });
 
   it('disarms after 6 plies without the refutation', async () => {
