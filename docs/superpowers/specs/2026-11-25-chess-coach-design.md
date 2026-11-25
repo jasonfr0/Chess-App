@@ -1,7 +1,7 @@
 # Chess Coach — Design
 
 Date: 2026-11-25
-Status: draft, awaiting approval
+Status: approved
 
 ## Intent and the why
 
@@ -153,10 +153,9 @@ Coaching is tracked per area: **openings, middlegame/tactics, endgame**. Each ar
 
 ### 9. Model and cost
 
-- Default model: **Claude Opus 5.5** (`claude-opus-5-5`, $4 input / $20 output per million tokens) at low effort.
-- Rough estimate: about 30–60 coaching calls per game at ~2K input and ~500 output tokens each comes to roughly **$0.50–$1.00 per game**, before prompt caching (which cuts the input side).
-- Cheaper option: **Claude Haiku 5.5** ($0.10 / $0.50) brings this to about **1–3 cents per game**, with less nuanced explanations.
-- *Open: the user picks the default (see "Open questions").*
+- Default model: **Claude Sonnet 5.5** (`claude-sonnet-5-5`, $2 input / $10 output per million tokens), chosen by the user. Claude's job is explaining facts it is given, not calculating chess, so Opus-level reasoning would mostly go unused.
+- Rough estimate: about 30–60 coaching calls per game at ~2K input and ~500 output tokens each comes to roughly **$0.25–$0.50 per game** before prompt caching (which cuts the input side).
+- The model is a setting. Opus 5.5 (`claude-opus-5-5`, ~$0.50–1/game) and Haiku 5.5 (`claude-haiku-5-5`, ~1–3¢/game) are selectable alternatives behind the same prompt and output schema.
 
 ### 10. Data
 
@@ -175,4 +174,4 @@ Coaching is tracked per area: **openings, middlegame/tactics, endgame**. Each ar
 
 ## Open questions
 
-- Default Claude model: Opus 5.5 (richer, ~$0.50–1/game) or Haiku 5.5 (~1–3¢/game).
+None.
