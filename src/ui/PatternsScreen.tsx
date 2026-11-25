@@ -1,0 +1,58 @@
+import { useState } from 'react';
+import { Chessboard } from 'react-chessboard';
+import { THEME_LESSONS } from '../coach/templates';
+import type { ProfileData, Theme } from '../types';
+
+const TOP = 5;
+
+interface Props { profile: ProfileData }
+
+export function PatternsScreen({ profile }: Props) {
+  const [fen, setFen] = useState<string | null>(null);
+  const themes = (Object.entries(profile.themes) as [Theme, ProfileData['themes'][Theme]][])
+    .filter(([, s]) => s.count > 0)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, TOP);
+
+  return (
+    <div className="screen patterns">
+      {fen && (
+        <section className="card" aria-label="Example position">
+          <div className="board">
+            <Chessboard
+              options={{
+                id: 'pattern', position: fen, allowDragging: false, allowDrawingArrows: false,
+                boardOrientation: fen.split(' ')[1] === 'b' ? 'black' : 'white',
+              }}
+            />
+          </div>
+          <p className="muted">Your move in this position. What did you miss?</p>
+          <button type="button" onClick={() => setFen(null)}>Close</button>
+        </section>
+      )}
+      {themes.length === 0 && (
+        <section className="card">
+          <h2>My patterns</h2>
+          <p>No patterns yet. Play a few games and the coach will collect the habits worth working on.</p>
+        </section>
+      )}
+      {themes.map(([theme, stat]) => (
+        <section className="card" key={theme}>
+          <h2>{THEME_LESSONS[theme].title} <span className="count">×{stat.count}</span></h2>
+          <p>{THEME_LESSONS[theme].habit}</p>
+          {stat.examples.length > 0 && (
+            <ul className="examples">
+              {[...stat.examples].reverse().map((ex, i) => (
+                <li key={`${ex.gameId}-${ex.ply}-${i}`}>
+                  <button type="button" className="link" onClick={() => setFen(ex.fen)}>
+                    Position from move {Math.floor(ex.ply / 2) + 1}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
