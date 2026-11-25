@@ -3,6 +3,7 @@ import { Chess } from 'chess.js';
 import data from '../../src/openings/repertoire.json';
 import { lookup, bookReplies, type RepertoireNode } from '../../src/openings/repertoire';
 import type { Color } from '../../src/types';
+import { validateClaims } from '../../src/coach/claude';
 
 const trees: Record<Color, RepertoireNode[]> = { w: data.white, b: data.black };
 
@@ -83,5 +84,34 @@ describe('repertoire tree', () => {
     expect(bookReplies('w', []).map((n) => n.san)).toEqual(['e4']);
     expect(bookReplies('b', []).map((n) => n.san).sort()).toEqual(['d4', 'e4']);
     expect(bookReplies('w', ['a3'])).toEqual([]);
+  });
+});
+
+describe('repertoire ideas pass the claim checks Claude is held to', () => {
+  it('every "<piece> on <square>" and "free"/"hanging" claim is true in its position', () => {
+    const bad: string[] = [];
+    for (const color of ['w', 'b'] as Color[]) {
+      walk(trees[color], [], (node, path) => {
+        const c = new Chess();
+        for (const san of path.slice(0, -1)) c.move(san);
+        const fen = c.fen();
+        c.move(node.san);
+        if (!validateClaims({ whatHappened: node.idea }, { fen, fenAfter: c.fen(), hanging: [] })) bad.push(`${path.join(' ')}: ${node.idea}`);
+      });
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('teaches c3 before the b1 knight goes to d2 (Nc3 would block the pawn)', () => {
+    const hit = lookup('w', ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Nf6', 'd3', 'Be7', 'O-O']);
+    expect(hit?.node.idea).toContain('push c3, then bring your b1 knight to d2');
+  });
+
+  it('after 3...d6 says the f8 bishop can only go to e7', () => {
+    expect(lookup('w', ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'd6'])?.node.idea)
+      .toContain('hems in the bishop on f8, which can now only go to e7');
+    const c = new Chess();
+    for (const san of ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'd6', 'a3']) c.move(san);
+    expect(c.moves({ square: 'f8' })).toEqual(['Be7']);
   });
 });

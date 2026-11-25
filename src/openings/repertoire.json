@@ -93,7 +93,7 @@
                                   "children": [
                                     {
                                       "san": "O-O",
-                                      "idea": "Your king is safe and your rook is ready to join the game. Next, bring your knight from b1 out and push c3.",
+                                      "idea": "Your king is safe and your rook is ready to join the game. Next, push c3, then bring your b1 knight to d2.",
                                       "children": [],
                                       "main": true
                                     }
@@ -106,7 +106,7 @@
                         },
                         {
                           "san": "d6",
-                          "idea": "Black plays solidly but locks the bishop on f8 behind its pawns. Keep developing: castle, then play c3 and d4 to take more of the center.",
+                          "idea": "Black plays solidly but hems in the bishop on f8, which can now only go to e7. Keep developing: castle, then play c3 and d4 to take more of the center.",
                           "children": []
                         },
                         {
@@ -353,7 +353,7 @@
                               "children": [
                                 {
                                   "san": "Be7",
-                                  "idea": "Your bishop on e7 blocks the pin, so your knight on f6 is free again. Next, castle to make your king safe.",
+                                  "idea": "Your bishop on e7 blocks the pin, so your knight on f6 is no longer pinned. Next, castle to make your king safe.",
                                   "children": [],
                                   "main": true
                                 }
@@ -442,7 +442,7 @@
                   "children": [
                     {
                       "san": "e3",
-                      "idea": "White builds a solid pawn chain. Play e6 to support d5 and free your bishop on f8.",
+                      "idea": "White builds a solid pawn chain. Play e6 to support d5 and open a path for your bishop on f8.",
                       "children": [
                         {
                           "san": "e6",
