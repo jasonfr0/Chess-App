@@ -132,6 +132,9 @@ describe('repertoire before-move texts give no move away', () => {
 
   it("uses the opponent's first move plan for Black", () => {
     expect(rootPlan('b')).toBe(data.black[0].plan);
+    expect(rootPlan('b').trim().length).toBeGreaterThan(0);
+    expect(rootPlan('b').length).toBeLessThanOrEqual(220);
+    expect(moveLeaks(rootPlan('b'))).toEqual([]);
   });
 });
 

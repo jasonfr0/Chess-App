@@ -89,7 +89,7 @@
                                   "children": [
                                     {
                                       "san": "O-O",
-                                      "idea": "Your king is safe in the corner and your rook can join the game. Next, use a pawn to guard the d4 square so Black's pieces cannot use it.",
+                                      "idea": "Your king is safe in the corner and your rook can join the game.",
                                       "children": [],
                                       "main": true
                                     }
@@ -213,7 +213,7 @@
                               "children": [
                                 {
                                   "san": "Nf6",
-                                  "idea": "Your knight attacks the pawn on e4 and clears the way for your king to get safe. If White pushes a pawn to attack yours, look at capturing it.",
+                                  "idea": "Your knight attacks the pawn on e4 and clears the way for your king to get safe. If White attacks one of your pawns, look at every way to answer.",
                                   "children": [],
                                   "main": true
                                 }
@@ -258,7 +258,7 @@
                       "children": [
                         {
                           "san": "a6",
-                          "idea": "Your pawn on a6 attacks the bishop. If it takes your knight, take back with the pawn that opens lines for your pieces.",
+                          "idea": "Your pawn on a6 attacks the bishop, so it has to step back or trade itself for your knight.",
                           "children": [
                             {
                               "san": "Ba4",
@@ -295,7 +295,7 @@
                       "san": "d4",
                       "name": "Scotch Game",
                       "idea": "White pushes the d-pawn and opens the center right away.",
-                      "plan": "Their pawn now attacks your pawn on e5. See if you can capture it, so the center opens on your terms.",
+                      "plan": "Their pawn now attacks your pawn on e5. Look at every way to answer that attack, and pick one that keeps your pieces coming out fast.",
                       "children": [
                         {
                           "san": "exd4",
@@ -342,7 +342,7 @@
               "san": "f4",
               "name": "King's Gambit",
               "idea": "White offers a pawn to open lines toward your king.",
-              "plan": "Accepting the pawn is fine. Then get your pieces out quickly and keep your king safe.",
+              "plan": "Is their pawn safe to take? Either way, get your pieces out quickly and keep your king safe.",
               "children": []
             }
           ],
@@ -383,7 +383,7 @@
                             {
                               "san": "Bg5",
                               "idea": "White's bishop pins your knight on f6 to your queen on d8.",
-                              "plan": "Break the pin: block the line between your knight and your queen with a piece, then get your king safe.",
+                              "plan": "Break the pin, then get your king safe.",
                               "children": [
                                 {
                                   "san": "Be7",
@@ -408,7 +408,7 @@
                             },
                             {
                               "san": "cxd5",
-                              "idea": "White's c-pawn trades itself for your pawn on d5.",
+                              "idea": "White's c-pawn captures your d5 pawn.",
                               "plan": "Win the pawn back in the way that keeps a pawn in the center.",
                               "children": [
                                 {
@@ -449,7 +449,7 @@
               "children": [
                 {
                   "san": "Nf6",
-                  "idea": "Your knight comes out toward the center and helps guard d5. Next, support your pawn on d5 with another pawn, then get your bishop out and your king safe.",
+                  "idea": "Your knight comes out toward the center and helps guard d5. Next, keep your center strong, then get your bishops out and your king safe.",
                   "children": [
                     {
                       "san": "c4",
@@ -478,7 +478,7 @@
               "children": [
                 {
                   "san": "Nf6",
-                  "idea": "Your knight develops and helps guard d5. Next, support your pawn on d5 with another pawn so your bishop on f8 can come out.",
+                  "idea": "Your knight develops and helps guard d5. Next, keep your center strong and get your pieces out.",
                   "children": [
                     {
                       "san": "e3",
