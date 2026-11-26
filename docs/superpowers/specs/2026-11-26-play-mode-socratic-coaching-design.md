@@ -1,7 +1,7 @@
 # Play Mode: Coach by Questions, Explain After — Design
 
 Date: 2026-11-26
-Status: draft, awaiting approval
+Status: approved
 Builds on: `docs/superpowers/specs/2026-11-25-chess-coach-design.md` (the original spec stays binding except where this document changes it)
 
 ## Intent and the why
