@@ -551,6 +551,26 @@ describe('Coach post_move', () => {
     expect(explain.mock.calls[0][0].facts.playedMoveIs).toBe('not_top');
   });
 
+  it('post_move packets carry the engine-checked reasons; the better move\'s only when it is not top', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const a = setup({ explain });
+    await a.coach.onUserMove(a.game, a.game.play('e1d2'));
+    await flush();
+    const p = explain.mock.calls[0][0];
+    expect(p.reasons).toBeDefined();
+    expect(p.bestReasons).not.toBeNull();
+    expect(p.bestReasons).toBeDefined();
+
+    const b = setup({ explain });
+    const { message } = await b.coach.onUserMove(b.game, b.game.play('e1e2'));
+    await b.coach.explainTopMove(message!.id);
+    await flush();
+    const q = explain.mock.calls[1][0];
+    expect(q.facts.playedMoveIs).toBe('top');
+    expect(q.reasons).toBeDefined();
+    expect(q.bestReasons).toBeNull();
+  });
+
   it('keeps a stronger-option upgrade through the opponent\'s reply and the next preMove', async () => {
     const d = deferred<Explanation | null>();
     const { game, coach, updates } = setup({ explain: () => d.promise });

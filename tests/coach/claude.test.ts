@@ -6,6 +6,8 @@ import type { Explanation, MistakeContext } from '../../src/coach/templates';
 import { mistakeTemplate } from '../../src/coach/templates';
 import { positionFacts } from '../../src/coach/facts';
 import type { ProfileSummary } from '../../src/types';
+import { BANNED_TERMS } from '../../src/coach/jargon';
+import { deriveReasons } from '../../src/coach/reasons';
 
 const profile: ProfileSummary = { topThemes: [{ theme: 'hanging_piece', count: 3 }], gamesPlayed: 5 };
 const tmpl: Explanation = { whatHappened: 'You played Nf3.', better: 'Nc3 was better.' };
@@ -62,6 +64,37 @@ describe('explainWithClaude', () => {
     expect(await fail(rejecting(Object.assign(new Error('529'), { status: 529 })))).toEqual({ ok: false, reason: 'api' });
     expect(await fail(rejecting(Object.assign(new Error('400'), { status: 400 })))).toEqual({ ok: false, reason: 'api' });
     expect(await fail(() => new Promise(() => {}), 50)).toEqual({ ok: false, reason: 'timeout' });
+  });
+  it('discards output that uses a banned term, in any field', async () => {
+    const outs: Explanation[] = [
+      { whatHappened: 'Nf3 gains a tempo on the pawn.' },
+      { whatHappened: 'Your knight on f3 is fine.', better: 'Nc3 keeps the Initiative.' },
+      { whatHappened: 'Your knight on f3 is fine.', lesson: 'Mind your pawn structure.' },
+    ];
+    for (const out of outs) {
+      const { client } = fake({ stop_reason: 'end_turn', parsed_output: out });
+      expect(await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
+    }
+  });
+  it('keeps the template when Claude uses jargon: the explainer returns null and the coach stays online', async () => {
+    const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Nf3 wins a tempo.' } });
+    const onOffline = vi.fn();
+    const explain = createExplainer({
+      settings: () => ({ apiKey: 'k', model: 'claude-sonnet-5-5' }), makeClient: async () => client, onOffline,
+    });
+    expect(await explain(packet)).toBeNull();
+    expect(onOffline).toHaveBeenCalledWith(false);
+  });
+  it('the system prompt is pitched at about 350 and lists every banned term', async () => {
+    const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
+    await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
+    const text: string = reqs[0].system[0].text;
+    expect(text).toContain('about 350');
+    for (const term of BANNED_TERMS) expect(text).toContain(`"${term}"`);
+    expect(text).toMatch(/explain only the given reasons/i);
+    expect(text).toMatch(/good example/i);
+    expect(text).toMatch(/bad example/i);
+    expect(text).not.toContain('400');
   });
   it('reports aborted when the caller aborts', async () => {
     const ac = new AbortController();
@@ -247,6 +280,8 @@ describe('buildPacket post_move', () => {
         recommendation: 'play_on' as const, bestUci: 'e2e4', bestSan: 'e4', refutationSan: ['e5', 'Nf3'] },
       move: { san: m.san, uci: 'a2a3', fenBefore: new Chess().fen(), fenAfter: c.fen(), color: m.color },
       kind: null, bookIdea: null, lineName: null, factsAfter: positionFacts(c.fen()),
+      reasons: deriveReasons(new Chess().fen(), 'a2a3', { book: null, area: 'opening' }),
+      bestReasons: deriveReasons(new Chess().fen(), 'e2e4', { book: null, area: 'opening' }),
     };
     const t = postMoveTemplate(ctx).explanation;
     const p = buildPacket('post_move', ctx, t, profile);
@@ -257,6 +292,28 @@ describe('buildPacket post_move', () => {
     // refutationSan[1] is the user's own next engine move: never allowed, never in the facts.
     expect(p.allowedMoves).not.toContain('Nf3');
     expect(p.facts.refutation).toEqual(['e5']);
+    expect(validateExplanation(t, p.allowedMoves)).toBe(true);
+    expect(validateClaims(t, p)).toBe(true);
+    expect(p.reasons).toEqual(ctx.reasons);
+    expect(p.bestReasons).toEqual(ctx.bestReasons);
+    expect(t.better).toMatch(/^e4 puts your pawn on the middle square e4/);
+  });
+  it('a top move carries its reasons and no better-move reasons', async () => {
+    const { postMoveTemplate } = await import('../../src/coach/postMove');
+    const c = new Chess();
+    const m = c.move('Nf3');
+    const ctx = {
+      verdict: { flagged: false, severity: 'ok' as const, cpLoss: 0, area: 'opening' as const, theme: 'other' as const,
+        recommendation: 'play_on' as const, bestUci: 'g1f3', bestSan: 'Nf3', refutationSan: ['d5'] },
+      move: { san: m.san, uci: 'g1f3', fenBefore: new Chess().fen(), fenAfter: c.fen(), color: m.color },
+      kind: 'top' as const, bookIdea: null, lineName: null, factsAfter: positionFacts(c.fen()),
+      reasons: deriveReasons(new Chess().fen(), 'g1f3', { book: null, area: 'opening' }),
+      bestReasons: null,
+    };
+    const t = postMoveTemplate(ctx).explanation;
+    const p = buildPacket('post_move', ctx, t, profile);
+    expect(p.reasons).toEqual(ctx.reasons);
+    expect(p.bestReasons).toBeNull();
     expect(validateExplanation(t, p.allowedMoves)).toBe(true);
     expect(validateClaims(t, p)).toBe(true);
   });

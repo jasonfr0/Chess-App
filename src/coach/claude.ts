@@ -5,6 +5,8 @@ import type { ProfileSummary } from '../types';
 import type { HangingPiece } from './facts';
 import type { Explanation, MistakeContext } from './templates';
 import type { PostMoveContext } from './postMove';
+import { BANNED_TERMS, findJargon } from './jargon';
+import type { Reasons } from './reasons';
 
 export const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'] as const;
 export type ModelId = (typeof MODEL_IDS)[number];
@@ -22,6 +24,10 @@ export interface FactPacket {
   facts: Record<string, unknown>;
   template: Explanation;
   profile: ProfileSummary;
+  /** post_move: the checked reasons for the played move. */
+  reasons?: Reasons;
+  /** post_move: the checked reasons for the better move (null when the played move is top or book). */
+  bestReasons?: Reasons | null;
 }
 
 const SAN_RE = /\b([O0]-[O0](-[O0])?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?[+#]?)\b/gi;
@@ -134,7 +140,7 @@ export function buildPacket(
         bookIdea: c.bookIdea, bookLine: c.lineName,
         forksAfter: forks, materialAfter: material, inCheckAfter: inCheck,
       },
-      template: t, profile: p,
+      template: t, profile: p, reasons: c.reasons, bestReasons: c.bestReasons,
     };
   }
   const c = ctx as MistakeContext;
@@ -159,7 +165,14 @@ const explanationSchema = z.object({
   lesson: z.string().optional(),
 });
 
-const SYSTEM_PROMPT = `You are a patient chess coach for a beginner rated about 400. You receive a JSON fact packet and rewrite its "template" explanation in warmer, clearer words.
+const BANNED_LIST = BANNED_TERMS.map((t) => `"${t}"`).join(', ');
+
+const SYSTEM_PROMPT = `You are a patient chess coach for a beginner rated about 350. They know how the pieces move, but not chess words. You receive a JSON fact packet and rewrite its "template" explanation in warmer, clearer words.
+
+Explain only the given reasons:
+- The reasons are in the template, and for kind "post_move" also in "reasons" (the played move) and "bestReasons" (the better move). Each was checked with the engine or the rules of chess.
+- Never add a reason of your own. If the template gives one reason, give one reason.
+- For kind "post_move": explain why the played move works (playedMoveIs "top" or "book") or why the stronger move is better than the played one ("not_top").
 
 Truth rule (strict):
 - Mention only moves listed in allowedMoves. Never calculate new lines or invent variations, and never contradict the facts.
@@ -167,12 +180,17 @@ Truth rule (strict):
 - Every claim about the position must come from the facts. Never claim a fork "wins" material; say it "attacks" the pieces.
 - "hanging" lists the pieces the opponent can win in "fenAfter" (the position after the user's move, for both post_move and mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
 - When you write "<piece> on <square>", that piece must stand on that square in "fen" or "fenAfter".
-- For kind "post_move": explain why the played move works (playedMoveIs "top" or "book") or why the stronger move is better than the played one ("not_top"); short, plain. Use only the template's reasons and the facts; never add a reason of your own.
 
-Style:
-- Plain words. Name the piece and the square, for example "your knight on f6".
+How to write for this player:
+- Short sentences. Everyday words. Name the real piece and square, for example "your knight on f3".
+- One idea per sentence. Do not stack clauses with "which", "while" or "thereby".
 - At most 3 sentences per field. Encouraging but direct.
 - Use the profile to connect this to the player's recurring habits when it fits, without inventing statistics.
+- Never use these words or phrases (any answer that uses one is thrown away): ${BANNED_LIST}.
+
+Good example: "Nf3 brings your knight out. It also attacks their pawn on e5. Getting your knights and bishops out early puts more of your army into the fight."
+
+Bad example (never write like this; it is full of words a beginner does not know): "Nf3 gains a tempo and seizes the initiative, with a positional grip on the centre."
 
 Return only the structured explanation.`;
 
@@ -232,6 +250,7 @@ export async function explainWithClaude(
     if (!msg.parsed_output) return { ok: false, reason: 'invalid' };
     const out = msg.parsed_output as Explanation;
     if (!validateExplanation(out, packet.allowedMoves) || !validateClaims(out, packet)) return { ok: false, reason: 'invalid' };
+    if (explanationStrings(out).some((s) => findJargon(s).length > 0)) return { ok: false, reason: 'invalid' };
     const { whatHappened, better, lesson } = out; // prose fields only
     return { ok: true, explanation: { whatHappened, ...(better !== undefined ? { better } : {}), ...(lesson !== undefined ? { lesson } : {}) } };
   } catch (e) {

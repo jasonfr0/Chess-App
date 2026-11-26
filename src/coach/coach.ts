@@ -15,6 +15,8 @@ import { preMoveCoaching } from './questions';
 import type { QuestionContext } from './questions';
 import { postMoveTemplate, topMoveKind } from './postMove';
 import type { PostMoveContext, TopKind } from './postMove';
+import { deriveReasons } from './reasons';
+import type { Reasons } from './reasons';
 import { buildPacket } from './claude';
 import type { FactPacket } from './claude';
 
@@ -203,7 +205,17 @@ export class Coach {
       if (!verdict.flagged) {
         // After-move feedback only where the coach still talks: full and guided.
         if (verdict.analysed === false || (level !== 'full' && level !== 'guided')) return { verdict, message: null };
-        return { verdict, message: this.postMove(verdict, move, topMoveKind(beforeAnalysis, move.uci, inBook, verdict), bookHit) };
+        const kind = topMoveKind(beforeAnalysis, move.uci, inBook, verdict);
+        // The played move's line is the move plus the engine's answer; the better move's is its own search line.
+        const reasons = deriveReasons(move.fenBefore, move.uci, {
+          book: bookHit, area: verdict.area, line: [move.uci, ...(afterAnalysis.lines[0]?.uci ?? [])],
+        });
+        const bestReasons = kind !== null ? null : deriveReasons(move.fenBefore, verdict.bestUci, {
+          book: lookup(game.userColor, [...before.map((m) => m.san), verdict.bestSan]),
+          area: verdict.area,
+          line: beforeAnalysis.lines.find((l) => l.uci[0] === verdict.bestUci)?.uci,
+        });
+        return { verdict, message: this.postMove(verdict, move, kind, bookHit, reasons, bestReasons) };
       }
 
       const refutationUci = afterAnalysis.lines[0]?.uci.slice(0, 4) ?? [];
@@ -240,10 +252,13 @@ export class Coach {
       () => this.post === post, (upgraded) => { post.message = upgraded; });
   }
 
-  private postMove(verdict: Verdict, move: PlayedMove, kind: TopKind, book: BookHit | null): CoachMessage {
+  private postMove(
+    verdict: Verdict, move: PlayedMove, kind: TopKind, book: BookHit | null,
+    reasons: Reasons, bestReasons: Reasons | null,
+  ): CoachMessage {
     const ctx: PostMoveContext = {
       verdict, move, kind, bookIdea: book?.node.idea ?? null, lineName: book?.lineName || null,
-      factsAfter: positionFacts(move.fenAfter),
+      factsAfter: positionFacts(move.fenAfter), reasons, bestReasons,
     };
     const { summary, explanation } = postMoveTemplate(ctx);
     const message: CoachMessage = {

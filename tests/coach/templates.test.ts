@@ -4,6 +4,9 @@ import { THEME_LESSONS, mistakeTemplate, moveNote } from '../../src/coach/templa
 import type { Verdict } from '../../src/coach/classify';
 import { positionFacts } from '../../src/coach/facts';
 import type { PlayedMove, Theme } from '../../src/types';
+import { findJargon } from '../../src/coach/jargon';
+import { deriveReasons } from '../../src/coach/reasons';
+import { postMoveTemplate } from '../../src/coach/postMove';
 
 function playAll(sans: string[]): PlayedMove[] {
   const c = new Chess();
@@ -134,4 +137,61 @@ describe('THEME_LESSONS', () => {
     }
     expect(THEME_LESSONS.allowed_fork.title).toBe('Walked into a fork');
   });
+});
+
+describe('no jargon in template text (sweep)', () => {
+  const THEMES: Theme[] = ['hanging_piece', 'ignored_threat', 'allowed_fork', 'missed_fork', 'missed_pin', 'missed_mate',
+    'allowed_mate', 'early_queen', 'undeveloped', 'king_safety', 'bad_trade', 'endgame_technique', 'other'];
+  // Deterministic pseudo-random games, so the sweep covers openings, middlegames and endgames.
+  function rng(seed: number) {
+    let x = seed;
+    return () => { x = (x * 1103515245 + 12345) % 2147483648; return x / 2147483648; };
+  }
+  it('post-move and mistake templates use no banned term across many positions', () => {
+    const found: string[] = [];
+    const starts: [string, 'opening' | 'middlegame' | 'endgame'][] = [
+      [new Chess().fen(), 'opening'], [new Chess().fen(), 'opening'],
+      ['r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N1PN2/PP2BPPP/R2QKB1R w KQ - 0 9', 'middlegame'],
+      ['8/5pk1/6p1/3r4/1p6/1P3PP1/5K1P/2R5 w - - 0 40', 'endgame'],
+    ];
+    for (const [seed, [startFen, startArea]] of starts.entries()) {
+      const rand = rng(seed + 1);
+      const c = new Chess(startFen);
+      for (let ply = 0; ply < 24 && !c.isGameOver(); ply++) {
+        const fen = c.fen();
+        const moves = c.moves({ verbose: true });
+        const m = moves[Math.floor(rand() * moves.length)];
+        const best = moves[Math.floor(rand() * moves.length)];
+        const area = startArea === 'opening' && ply >= 12 ? 'middlegame' as const : startArea;
+        c.move(m);
+        const uci = m.from + m.to + (m.promotion ?? '');
+        const bestUci = best.from + best.to + (best.promotion ?? '');
+        const after = c.fen();
+        const reply = c.moves({ verbose: true })[0];
+        const move: PlayedMove = { san: m.san, uci, fenBefore: fen, fenAfter: after, color: m.color };
+        const factsAfter = positionFacts(after);
+        const replyUci = reply ? [reply.from + reply.to + (reply.promotion ?? '')] : [];
+        const reasons = deriveReasons(fen, uci, { book: null, area, line: [uci, ...replyUci] });
+        const bestReasons = deriveReasons(fen, bestUci, { book: null, area });
+        const texts: string[] = [];
+        const base: Verdict = {
+          flagged: false, severity: 'ok', cpLoss: 40, area, theme: 'other', recommendation: 'play_on',
+          bestUci, bestSan: best.san, refutationSan: reply ? [reply.san] : [],
+        };
+        for (const kind of ['top', 'book', null] as const) {
+          const t = postMoveTemplate({
+            verdict: base, move, kind, bookIdea: null, lineName: null, factsAfter, reasons,
+            bestReasons: kind === null ? bestReasons : null,
+          });
+          texts.push(t.summary, t.explanation.whatHappened, t.explanation.better ?? '');
+        }
+        // One theme per position, in turn: betterReason (the post_move fallback) is covered through it.
+        const verdict: Verdict = { ...base, theme: THEMES[ply % THEMES.length], flagged: true, severity: 'blunder' };
+        const e = mistakeTemplate({ verdict, move, factsAfter, themeCount: 2 });
+        texts.push(e.whatHappened, e.better ?? '', e.lesson ?? '');
+        for (const t of texts) if (findJargon(t).length > 0) found.push(t);
+      }
+    }
+    expect(found).toEqual([]);
+  }, 30000);
 });
