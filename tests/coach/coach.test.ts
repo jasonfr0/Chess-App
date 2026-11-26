@@ -684,6 +684,9 @@ describe('Coach consequence tracker', () => {
     game.play('d6e5'); // the knight is lost a move later
     const m = coach.checkConsequence(game);
     expect(m?.kind).toBe('consequence');
+    // The engine line is dxe5, Ke2: only the opponent's moves are named, never the user's own.
+    expect(m?.explanation.whatHappened).toContain('dxe5');
+    expect(m?.explanation.whatHappened).not.toContain('Ke2');
     expect(coach.checkConsequence(game)).toBeNull();
   });
 

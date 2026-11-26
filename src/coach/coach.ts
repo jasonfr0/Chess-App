@@ -103,7 +103,7 @@ function lostPiece(move: PlayedMove, refutationUci: string[], since: PlayedMove[
 
 interface CacheEntry { fen: string; analysis: Promise<Analysis>; done?: Analysis }
 interface Mistake { verdict: Verdict; move: PlayedMove; refutationUci: string[]; plyAfter: number }
-interface Tracker { mistake: Mistake; lineSans: string[]; opponentSans: string[]; gain: number; balanceAtMistake: number }
+interface Tracker { mistake: Mistake; opponentSans: string[]; gain: number; balanceAtMistake: number }
 
 export class Coach {
   private listeners: ((m: CoachMessage) => void)[] = [];
@@ -285,7 +285,6 @@ export class Coach {
     const gain = balanceAtMistake - balance(line.fen, m.move.color);
     this.tracker = {
       mistake: m,
-      lineSans: line.sans,
       opponentSans: line.sans.filter((_, i) => i % 2 === 0), // the refutation starts with their reply
       gain,
       balanceAtMistake,
@@ -312,8 +311,8 @@ export class Coach {
     const piece = lostPiece(move, refutationUci, since);
     const lead = piece ? `Here's where leaving ${yours(piece)} costs you.` : `Here's where ${move.san} costs you.`;
     const detail = lineMatched
-      ? `They played ${joinList(t.opponentSans)}, just as the coach showed after ${move.san}.`
-      : `You have now lost the material the coach's line after ${move.san} showed (${t.lineSans.join(', ')}).`;
+      ? `They played ${joinList(t.opponentSans)}, just as the coach warned after ${move.san}.`
+      : `You have now lost the material the coach warned about after ${move.san} (their line: ${joinList(t.opponentSans)}).`;
     const lesson = THEME_LESSONS[verdict.theme];
     return {
       id: this.newId(), kind: 'consequence', arrows: [], source: 'template', verdict,
