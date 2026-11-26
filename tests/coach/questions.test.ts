@@ -104,11 +104,12 @@ describe('preMoveCoaching questions', () => {
     expect(r.questions).not.toContain(MATE_Q);
   });
 
-  it('asks about winning an opponent piece from the facts when there is no analysis', () => {
-    // Black's bishop on d4 is undefended and White's rook on d1 attacks it.
+  it('does not ask about winning a piece before the analysis arrives: the facts alone cannot tell a trap', () => {
+    // Black's bishop on d4 is undefended and White's rook on d1 attacks it, but without the engine
+    // the coach cannot know that taking it is safe.
     const r = preMoveCoaching(ctxFrom(['Bd4'], { start: '4k3/8/8/4b3/8/8/8/3RK3 b - - 0 30' }));
-    expect(r.questions).toContain(WIN_Q);
-    expect(r.nudge).toBe('Look at their bishop on d4.');
+    expect(r.questions).not.toContain(WIN_Q);
+    expect(r.nudge).not.toBe('Look at their bishop on d4.');
   });
 
   it('asks about winning a piece when the engine line captures it and gains material', () => {
@@ -292,9 +293,97 @@ describe('preMoveCoaching never leaks a move', () => {
 });
 
 describe('preMoveCoaching with stale analysis', () => {
-  it('falls back to the facts for a winnable piece', () => {
+  it('treats a stale analysis as none: no win question from the facts alone', () => {
     const ctx = ctxFrom(['Bd4'], { start: '4k3/8/8/4b3/8/8/8/3RK3 b - - 0 30' });
     ctx.analysis = { fen: START, depth: 10, lines: [{ uci: ['e2e4'], cp: 0, mate: null }] };
-    expect(preMoveCoaching(ctx).questions).toContain('Is there anything of theirs you can win?');
+    expect(preMoveCoaching(ctx).questions).not.toContain('Is there anything of theirs you can win?');
+  });
+});
+
+/**
+ * Real Node Stockfish analyses (stockfish-19-lite-single, `go depth 15`, MultiPV 3).
+ * In each, the engine's best move captures something, yet the user is not winning anything:
+ * a level or losing position, or even trades.
+ */
+const NO_WIN_FIXTURES: { fen: string; lines: EngineLine[] }[] = [
+  { fen: 'r1bq1knr/2bn1p2/p3p2p/1PpP2p1/5P2/2NPP2N/1P2Q1PP/R1B1KB1R b KQ - 0 13', lines: [
+    { uci: ['e6d5', 'c3d5', 'c7d6', 'd5c3', 'g8f6', 'g2g3', 'c8b7', 'f1g2'], cp: -224, mate: null },
+    { uci: ['e6e5', 'f4g5', 'h6g5', 'e3e4', 'c7a5', 'c1d2', 'g8f6', 'h3g5'], cp: -276, mate: null },
+    { uci: ['d7f6', 'd5e6', 'c8e6', 'b5a6', 'c7a5', 'c1d2', 'a8a6', 'f4g5'], cp: -280, mate: null },
+  ] },
+  { fen: 'r1b1kb1r/ppqnpppp/5n2/2pp4/2PP4/P3PN2/1P3PPP/RNBQKB1R w KQkq - 1 6', lines: [
+    { uci: ['c4d5', 'c5d4', 'f3d4', 'f6d5', 'e3e4', 'd5f6', 'c1e3', 'a7a6'], cp: 108, mate: null },
+    { uci: ['b1c3', 'd5c4', 'd4d5', 'g7g6', 'f1c4', 'f8g7', 'c4a2', 'e8g8'], cp: 72, mate: null },
+    { uci: ['d4c5', 'd5c4', 'f1c4', 'e7e6', 'b1d2', 'a7a5', 'b2b3', 'f8c5'], cp: 38, mate: null },
+  ] },
+  { fen: 'r1b4r/2bqnpk1/pn5p/1P1PP3/4BP2/2N2Q1N/1P4PP/R1B1K2R b KQ - 4 20', lines: [
+    { uci: ['b6d5', 'e4d5', 'e7d5', 'c3d5', 'a8b8', 'f3g3', 'g7f8', 'g3a3'], cp: -627, mate: null },
+    { uci: ['e7d5', 'c3d5', 'b6d5', 'e1g1', 'd7b5', 'e4d5', 'c8h3', 'd5c6'], cp: -646, mate: null },
+    { uci: ['a6b5', 'a1a8', 'b6a8', 'h3f2', 'b5b4', 'c3e2', 'c7b6', 'd5d6'], cp: -720, mate: null },
+  ] },
+  { fen: '1rb3nr/pppp3Q/5kp1/2q1pP2/1bP1N3/2N5/1PBP1PPP/R1B2RK1 b - - 2 14', lines: [
+    { uci: ['f6f5', 'h7f7', 'f5g4', 'f7g6', 'g4f4', 'g6g5'], cp: null, mate: -3 },
+  ] },
+];
+
+/**
+ * The reviewer's numbers for the same positions, with lines that stop mid-exchange (as a shorter or
+ * truncated search returns them): judged at the line's last reply, each looked like a material gain.
+ */
+const REVIEWER_FIXTURES: { fen: string; line: EngineLine }[] = [
+  // exd5 Nxd5 gxf4, then a quiet move: a pawn up only before White takes back.
+  { fen: NO_WIN_FIXTURES[0].fen, line: { uci: ['e6d5', 'c3d5', 'g5f4', 'a1a2'], cp: -223, mate: null } },
+  // cxd5 cxd4 Nxd4, then a quiet move: +117 but the trades are even after Black's first reply.
+  { fen: NO_WIN_FIXTURES[1].fen, line: { uci: ['c4d5', 'c5d4', 'f3d4', 'e7e6'], cp: 117, mate: null } },
+  // Nxd5 Bxd5 Nxd5, then a quiet move.
+  { fen: NO_WIN_FIXTURES[2].fen, line: { uci: ['b6d5', 'e4d5', 'e7d5', 'a1a2'], cp: -655, mate: null } },
+  // Kxf5, and White mates in 3.
+  { fen: NO_WIN_FIXTURES[3].fen, line: { uci: ['f6f5', 'h7f7', 'f5g4', 'f7g6'], cp: null, mate: -3 } },
+];
+
+function bareCtx(fen: string, lines: EngineLine[]): QuestionContext {
+  return {
+    fen, lastMove: null, history: [], userColor: new Chess(fen).turn() as Color,
+    facts: positionFacts(fen), analysis: { fen, depth: 14, lines }, book: null,
+  };
+}
+
+describe('win question only when the user is really winning something', () => {
+  it.each(NO_WIN_FIXTURES.map((f) => [f.fen, f] as const))('no win question (Stockfish) in %s', (_l, f) => {
+    const r = preMoveCoaching(bareCtx(f.fen, f.lines));
+    expect(new Chess(f.fen).move({ from: f.lines[0].uci[0].slice(0, 2), to: f.lines[0].uci[0].slice(2, 4) }).captured).toBeTruthy();
+    expect(r.questions).not.toContain(WIN_Q);
+  });
+
+  it.each(REVIEWER_FIXTURES.map((f) => [f.fen, f] as const))('no win question (reviewer numbers) in %s', (_l, f) => {
+    const c = new Chess(f.fen);
+    for (const u of f.line.uci) c.move({ from: u.slice(0, 2), to: u.slice(2, 4) }); // a legal line
+    expect(preMoveCoaching(bareCtx(f.fen, [f.line])).questions).not.toContain(WIN_Q);
+  });
+
+  it('judges the gain after the first reply only: a pawn grab that is taken straight back is not a win', () => {
+    // Rxd5 exd5 Rxd5: two pawns for a rook, then a pawn back; after the first reply it is a loss.
+    const fen = '3k4/8/4p3/3p4/8/8/3R4/3RK3 w - - 0 1';
+    const r = preMoveCoaching(bareCtx(fen, [{ uci: ['d2d5', 'e6d5', 'd1d5'], cp: 150, mate: null }]));
+    expect(r.questions).not.toContain(WIN_Q);
+  });
+
+  it('no win question when the line wins material but the eval is under +100', () => {
+    const fen = '4k3/8/8/8/3b4/8/8/3RK3 w - - 0 30';
+    const r = preMoveCoaching(bareCtx(fen, [{ uci: ['d1d4', 'e8e7'], cp: 99, mate: null }]));
+    expect(r.questions).not.toContain(WIN_Q);
+  });
+
+  it('no win question when the line ends in a mate against the user', () => {
+    const fen = '4k3/8/8/8/3b4/8/8/3RK3 w - - 0 30';
+    const r = preMoveCoaching(bareCtx(fen, [{ uci: ['d1d4', 'e8e7'], cp: null, mate: -3 }]));
+    expect(r.questions).not.toContain(WIN_Q);
+  });
+
+  it('asks the win question for a clean piece win (+300 after the first reply)', () => {
+    const fen = '4k3/8/8/8/3b4/8/8/3RK3 w - - 0 30';
+    const r = preMoveCoaching(bareCtx(fen, [{ uci: ['d1d4', 'e8e7', 'e1e2'], cp: 300, mate: null }]));
+    expect(r.questions).toContain(WIN_Q);
+    expect(r.nudge).toBe('Look at their bishop on d4.');
   });
 });

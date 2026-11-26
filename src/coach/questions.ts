@@ -5,6 +5,7 @@ import { rootPlan, type BookHit } from '../openings/repertoire';
 import { pins, positionFacts, principleViolations } from './facts';
 import type { PieceRef, PositionFacts } from './facts';
 import { moveLeaks } from './leaks';
+import { lineScore } from './classify';
 
 /** Everything known before the user's move. `lastMove` is null on move 1 as White. */
 export interface QuestionContext {
@@ -122,39 +123,29 @@ function mateItem(ctx: QuestionContext): Item | null {
     : { question: MATE_QUIET_Q, nudge: `Look at what your ${piece} could reach.` };
 }
 
+/** The user must be clearly better in the engine line (side-to-move POV) for "win" to be true. */
+const WIN_MIN_EVAL = 100;
+
 /**
- * An opponent piece the user can win. With analysis: the best move captures it and the line gains
- * material (judged after the opponent's last reply in the line). Without: a hanging piece from the facts.
+ * An opponent piece the user can win: the engine's best move captures it, the user is still ahead
+ * in material after the opponent's first reply (so a recapture counts), and the engine rates the line
+ * at least +1 pawn for the user (never a mate against them). Without analysis there is no win
+ * question: the facts alone cannot tell a free piece from a trap.
  */
 function winItem(ctx: QuestionContext): Item | null {
   const line = bestLine(ctx);
-  if (analysisFor(ctx) === null) {
-    const theirs = ctx.facts.hanging
-      .filter((h) => h.color !== ctx.userColor)
-      .sort((a, b) => VALUE[b.piece] - VALUE[a.piece])[0];
-    return theirs ? { question: WIN_Q, nudge: `Look at their ${NAMES[theirs.piece]} on ${theirs.square}.` } : null;
-  }
-  if (!line) return null;
+  if (!line || lineScore(line) < WIN_MIN_EVAL) return null;
   const chess = new Chess(ctx.fen);
   const first = playUci(chess, line.uci[0]);
   if (!first?.captured) return null;
   const square = first.isEnPassant() ? first.to[0] + first.from[1] : first.to;
   const start = balance(ctx.fen, ctx.userColor);
-  // Judge the gain after the opponent's last reply in the line, so a recapture is counted.
-  let afterReply: string | null = null;
-  for (let i = 1; i < line.uci.length; i++) {
-    if (!playUci(chess, line.uci[i])) break;
-    if (i % 2 === 1) afterReply = chess.fen();
+  if (line.uci.length > 1) {
+    if (!playUci(chess, line.uci[1])) return null;
+  } else if (!ctx.facts.hanging.some((h) => h.square === square && h.color !== ctx.userColor)) {
+    return null; // no reply in the line: only trust the capture if the piece was hanging anyway
   }
-  if (afterReply === null) {
-    // No reply in the line: only trust the capture if the piece was hanging anyway.
-    if (!ctx.facts.hanging.some((h) => h.square === square && h.color !== ctx.userColor)) return null;
-    const c = new Chess(ctx.fen);
-    playUci(c, line.uci[0]);
-    afterReply = c.fen();
-  }
-  const end = balance(afterReply, ctx.userColor);
-  if (end <= start) return null;
+  if (balance(chess.fen(), ctx.userColor) <= start) return null;
   return { question: WIN_Q, nudge: `Look at their ${NAMES[first.captured]} on ${square}.` };
 }
 
