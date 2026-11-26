@@ -740,6 +740,30 @@ describe('GameScreen mistake flow', () => {
       expect(lastRecord(onProfile)?.assisted).toBeUndefined();
     });
 
+    it('watched, then Take it back: a retry that plays one of the line\'s user moves is assisted', async () => {
+      const { onProfile } = await blunderA3();
+      fireEvent.click(screen.getByRole('button', { name: '▶ Watch what happens' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Back to the card' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Take it back' }));
+      await waitFor(() => expect(fen()).toBe(START));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('c2', 'c3'); // the line's second user move, played from the retry position
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBe(true);
+    });
+
+    it('not watched, then Take it back: the same retry is independent', async () => {
+      const { onProfile } = await blunderA3();
+      fireEvent.click(screen.getByRole('button', { name: 'Take it back' }));
+      await waitFor(() => expect(fen()).toBe(START));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('c2', 'c3');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+    });
+
     it('after the game leaves the line once, a later move from the old line is independent', async () => {
       const { onProfile } = await blunderA3();
       fireEvent.click(screen.getByRole('button', { name: '▶ Watch what happens' }));

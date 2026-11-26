@@ -85,6 +85,11 @@ export interface GameView {
    * game leaves the line.
    */
   watchedLine: WatchPly[] | null;
+  /**
+   * After watching, then Take it back: the retry position (the FEN before the mistake) and the
+   * watched line's user moves. A move from that position equal to any of them is assisted.
+   */
+  watchedTakeBackFor: { fen: string; ucis: string[] } | null;
   /** The Show me / Play on reveal of the better move, shown in "Your last move". */
   reveal: CoachMessage | null;
   /** FEN in which Show me was used: a move from it is assisted, and the reveal's green arrow shows there. */
@@ -140,7 +145,7 @@ const INITIAL: GameView = {
   phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null, hintHighlight: [],
   promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false, linesOffSuggestion: false,
   lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null, betterShownFor: null,
-  viewPly: null, newMoveWhileViewing: false, watching: null, watchedLine: null, reveal: null, showMeFor: null,
+  viewPly: null, newMoveWhileViewing: false, watching: null, watchedLine: null, watchedTakeBackFor: null, reveal: null, showMeFor: null,
   linesShownFor: null,
 };
 
@@ -452,7 +457,9 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       // After watching the line and playing on: its next user move, while the game still follows it.
       const next = v.watchedLine && onWatchedLine(game) ? v.watchedLine[game.history().length - watchStart.current] : undefined;
       const followsWatched = next?.by === 'user' && next.uci === uci;
-      const assisted = nudged || shown || playsShownBetter || withLines || followsWatched;
+      // After watching, then taking back: a retry that plays any user move the line showed.
+      const retriesWatched = v.watchedTakeBackFor?.fen === fen && v.watchedTakeBackFor.ucis.includes(uci);
+      const assisted = nudged || shown || playsShownBetter || withLines || followsWatched || retriesWatched;
       let move;
       try { move = game.play(uci); } catch { return false; }
       followWatchedLine(game);
@@ -482,14 +489,18 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const game = view.current.game;
       if (!game || view.current.phase !== 'mistake') return;
       stopWork();
+      const watched = watchedThis.current && view.current.mistake?.watch ? view.current.mistake.watch : null;
       game.takeBackUserMove();
       // The taken-back move no longer counts toward this game's moves.
       meta.current.userMoves = Math.max(0, meta.current.userMoves - 1);
       if (meta.current.lastWithLines) meta.current.attackLinesMoves = Math.max(0, meta.current.attackLinesMoves - 1);
       meta.current.lastWithLines = false;
       save();
-      // The position never happens, so a watched line plays no part.
-      set({ phase: 'user', mistake: null, hints: [], hintHighlight: [], watching: null, reveal: null });
+      // The position never happens, but the watched line showed moves: replaying one from here is help.
+      set({
+        phase: 'user', mistake: null, hints: [], hintHighlight: [], watching: null, reveal: null,
+        ...(watched ? { watchedTakeBackFor: { fen: game.fen(), ucis: watched.filter((p) => p.by === 'user').map((p) => p.uci) } } : {}),
+      });
     },
 
     playOn() {
