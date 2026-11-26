@@ -6,6 +6,7 @@ import type { HangingPiece } from './facts';
 import type { Explanation, MistakeContext } from './templates';
 import type { PostMoveContext } from './postMove';
 import { BANNED_TERMS, findJargon } from './jargon';
+import { firstSentence } from './reasons';
 import type { Reasons } from './reasons';
 
 export const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'] as const;
@@ -118,6 +119,11 @@ function allowedFrom(explicit: string[], t: Explanation): string[] {
  */
 const opponentReply = (refutationSan: string[]) => refutationSan.slice(0, 1);
 
+/** Reasons as sent to Claude: an opening idea keeps only its first sentence (no "Next, …" advice). */
+function forPacket(r: Reasons): Reasons {
+  return r.opening ? { ...r, opening: { ...r.opening, idea: firstSentence(r.opening.idea) } } : r;
+}
+
 export function buildPacket(kind: 'post_move', ctx: PostMoveContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(kind: 'mistake', ctx: MistakeContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(
@@ -140,7 +146,7 @@ export function buildPacket(
         bookIdea: c.bookIdea, bookLine: c.lineName,
         forksAfter: forks, materialAfter: material, inCheckAfter: inCheck,
       },
-      template: t, profile: p, reasons: c.reasons, bestReasons: c.bestReasons,
+      template: t, profile: p, reasons: forPacket(c.reasons), bestReasons: c.bestReasons && forPacket(c.bestReasons),
     };
   }
   const c = ctx as MistakeContext;
@@ -180,6 +186,7 @@ Truth rule (strict):
 - Every claim about the position must come from the facts. Never claim a fork "wins" material; say it "attacks" the pieces.
 - "hanging" lists the pieces the opponent can win in "fenAfter" (the position after the user's move, for both post_move and mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
 - When you write "<piece> on <square>", that piece must stand on that square in "fen" or "fenAfter".
+- For the better move, describe pieces only where they stand now (it was not played).
 
 How to write for this player:
 - Short sentences. Everyday words. Name the real piece and square, for example "your knight on f3".

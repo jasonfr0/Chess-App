@@ -98,15 +98,36 @@ describe('deriveReasons', () => {
     expect(r.fundamentals).toContain('check_threat');
   });
 
-  it('a quiet move that wins material later in the line (fork) is wins_material', () => {
-    // White knight forks king and rook.
+  it('a quiet move never claims material won later in the line (the user\'s own next move)', () => {
+    // White knight forks king and rook: the rook is won only by the user's next move, so no "wins".
     const fen = 'r3k3/8/8/8/8/8/8/1N2K3 w - - 0 30';
     const r = deriveReasons(fen, 'b1c3', { book: null, area: 'endgame', line: ['b1c3'] });
     expect(r.fundamentals).not.toContain('wins_material');
     const fen2 = 'r3k3/8/8/1N6/8/8/8/4K3 w - - 0 30';
     const r2 = deriveReasons(fen2, 'b5c7', { book: null, area: 'endgame', line: ['b5c7', 'e8d7', 'c7a8', 'd7c8'] });
     expect(r2.fundamentals).toContain('check_threat');
-    expect(r2.fundamentals).toContain('wins_material');
+    expect(r2.fundamentals).not.toContain('wins_material');
+    expect(r2.effect).not.toMatch(/wins/);
+  });
+
+  it('1.e4 with the line d5 exd5: no "wins" for the quiet pawn move', () => {
+    const r = deriveReasons(START, 'e2e4', { book: null, area: 'opening', line: ['e2e4', 'd7d5', 'e4d5', 'g8f6', 'b1c3'] });
+    expect(r.fundamentals).not.toContain('wins_material');
+    expect(r.effect ?? '').not.toMatch(/wins|ahead/);
+    expect(reasonText('e4', r) ?? '').not.toMatch(/wins|ahead/);
+  });
+
+  it('does not repeat an opening rule the "why" sentence already states', () => {
+    for (const [uci, why] of [['g1f3', FUNDAMENTAL_WHY.develops], ['e2e4', FUNDAMENTAL_WHY.centre]] as const) {
+      const t = reasonText('x', deriveReasons(START, uci, noBook))!;
+      expect(t).toContain(why);
+      expect(t).not.toMatch(/rule:/);
+      expect(sentences(t)).toBeLessThanOrEqual(2);
+    }
+    const castle = fenOf(['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Bc5']);
+    const t = reasonText('O-O', deriveReasons(castle, 'e1g1', noBook))!;
+    expect(t).toContain(FUNDAMENTAL_WHY.king_safety);
+    expect(t).not.toMatch(/rule:/);
   });
 
   it('threatens checkmate (Qh5 eyeing f7)', () => {

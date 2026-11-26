@@ -52,6 +52,9 @@ const RULE: Record<Fundamental, string> = {
   king_activity: 'use your king in the endgame',
 };
 
+/** Ideas whose "why" sentence already states the rule, so naming the rule too would repeat it. */
+const SELF_EXPLAINED: ReadonlySet<Fundamental> = new Set(['develops', 'centre', 'king_safety']);
+
 /** Opening principles, named when out of book in the opening. */
 const PRINCIPLE: Partial<Record<Fundamental, string>> = {
   king_safety: 'castle early to keep your king safe',
@@ -136,8 +139,10 @@ function newlyDefended(before: Chess, after: Chess, m: Move): PieceRef[] {
 }
 
 /**
- * Mover's material change after the line's first exchange (the first run of captures), and still
- * at the line's end. Null when the line has no capture, or ends before the exchange is shown to be over.
+ * Mover's material change after the exchange the move itself starts (the run of captures from the
+ * move on), and still at the line's end. Null when the move is not a capture (material won later
+ * would come from the user's own next moves: a hint, and not this move's doing), or when the line
+ * ends before the exchange is shown to be over.
  */
 function exchangeGain(fen: string, line: string[], color: Color): number | null {
   const c = new Chess(fen);
@@ -150,9 +155,8 @@ function exchangeGain(fen: string, line: string[], color: Color): number | null 
     captures.push(Boolean(m.captured));
     balances.push(balance(c, color));
   }
-  const first = captures.indexOf(true);
-  if (first < 0) return null;
-  let end = first;
+  if (!captures[0]) return null;
+  let end = 0;
   while (end < captures.length && captures[end]) end++;
   if (end >= captures.length) return null; // nothing after the captures: a take-back may still come
   return Math.min(balances[end - 1], balances[balances.length - 1]) - base;
@@ -323,7 +327,6 @@ export function deriveReasons(
   if (!mate) {
     if (check) consequences.push('gives check');
     if (mateThreat) consequences.push('threatens checkmate');
-    if (!m.captured && gain !== null && gain > 0) consequences.push(`wins ${amount(gain)}`);
     // A piece of ours that could be won before, and no longer can (moved away, guarded or freed).
     // Never while giving check: with the opponent in check, legal captures are limited, so "not
     // hanging" proves nothing. With a line, the piece must also survive the reply.
@@ -364,7 +367,7 @@ export function deriveReasons(
   return out;
 }
 
-function firstSentence(text: string): string {
+export function firstSentence(text: string): string {
   return /^.*?[.!?](?=\s|$)/.exec(text.trim())?.[0] ?? text.trim();
 }
 
@@ -383,6 +386,7 @@ export function reasonText(san: string, r: Reasons): string | null {
   if (r.promotion) return [...out, PROMOTION_WHY[r.promotion]].join(' ');
 
   if (r.opening) out.push(r.effect ? `It's part of the ${r.opening.name}.` : idea!);
+  else if (primary && SELF_EXPLAINED.has(primary)) { /* the "why" below already states the rule */ }
   else if (r.principle) out.push(`It follows a key opening rule: ${r.principle}.`);
   else if (primary) out.push(`It follows a simple rule: ${RULE[primary]}.`);
 

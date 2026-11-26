@@ -95,6 +95,7 @@ describe('explainWithClaude', () => {
     expect(text).toMatch(/good example/i);
     expect(text).toMatch(/bad example/i);
     expect(text).not.toContain('400');
+    expect(text).toContain('For the better move, describe pieces only where they stand now (it was not played)');
   });
   it('reports aborted when the caller aborts', async () => {
     const ac = new AbortController();
@@ -297,6 +298,27 @@ describe('buildPacket post_move', () => {
     expect(p.reasons).toEqual(ctx.reasons);
     expect(p.bestReasons).toEqual(ctx.bestReasons);
     expect(t.better).toMatch(/^e4 puts your pawn on the middle square e4/);
+  });
+  it('sends only the first sentence of an opening idea in the reasons (no "Next, ..." advice)', async () => {
+    const { postMoveTemplate } = await import('../../src/coach/postMove');
+    const c = new Chess();
+    const m = c.move('a3');
+    const opening = { name: 'Italian Game', idea: 'Claim the centre. Next, bring out your bishop.' };
+    const base = deriveReasons(new Chess().fen(), 'e2e4', { book: null, area: 'opening' });
+    const ctx = {
+      verdict: { flagged: false, severity: 'ok' as const, cpLoss: 80, area: 'opening' as const, theme: 'other' as const,
+        recommendation: 'play_on' as const, bestUci: 'e2e4', bestSan: 'e4', refutationSan: ['e5'] },
+      move: { san: m.san, uci: 'a2a3', fenBefore: new Chess().fen(), fenAfter: c.fen(), color: m.color },
+      kind: null, bookIdea: null, lineName: null, factsAfter: positionFacts(c.fen()),
+      reasons: { ...deriveReasons(new Chess().fen(), 'a2a3', { book: null, area: 'opening' }), opening },
+      bestReasons: { ...base, opening },
+    };
+    const p = buildPacket('post_move', ctx, postMoveTemplate(ctx).explanation, profile);
+    expect(p.reasons?.opening).toEqual({ name: 'Italian Game', idea: 'Claim the centre.' });
+    expect(p.bestReasons?.opening).toEqual({ name: 'Italian Game', idea: 'Claim the centre.' });
+    expect(JSON.stringify(p.reasons)).not.toContain('Next');
+    expect(JSON.stringify(p.bestReasons)).not.toContain('Next');
+    expect(ctx.bestReasons.opening.idea).toContain('Next'); // the context itself is not changed
   });
   it('a top move carries its reasons and no better-move reasons', async () => {
     const { postMoveTemplate } = await import('../../src/coach/postMove');

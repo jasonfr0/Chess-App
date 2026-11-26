@@ -553,13 +553,24 @@ describe('Coach post_move', () => {
 
   it('post_move packets carry the engine-checked reasons; the better move\'s only when it is not top', async () => {
     const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
-    const a = setup({ explain });
-    await a.coach.onUserMove(a.game, a.game.play('e1d2'));
+    // From the start, a3 is 40 cp worse than Nf3: the better move's reasons are its own, checked.
+    const game = new GameState('w');
+    const a3 = new GameState('w').play('a2a3');
+    const engine = new FakeEngine({
+      [START_FEN]: [line(['g1f3', 'd7d5'], 40), line(['a2a3', 'e7e5'], 0)],
+      [a3.fenAfter]: [line(['e7e5', 'g1f3'], 0)],
+    });
+    const coach = new Coach(makeDeps(engine, { explain }));
+    const first = await coach.onUserMove(game, game.play('a2a3'));
+    expect(first.message?.topKind).toBeNull();
     await flush();
     const p = explain.mock.calls[0][0];
-    expect(p.reasons).toBeDefined();
-    expect(p.bestReasons).not.toBeNull();
-    expect(p.bestReasons).toBeDefined();
+    expect(p.facts.playedMoveIs).toBe('not_top');
+    expect(p.reasons?.fundamentals).toEqual([]);
+    expect(p.bestReasons?.fundamentals[0]).toBe('develops');
+    expect(p.bestReasons?.effect).toMatch(/^brings your knight out/);
+    expect(p.template.better).toMatch(/^Nf3 brings your knight out/);
+    expect(p.template.whatHappened).toBe('After a3, their best answer is e5. a3 does not bring a knight or bishop out.');
 
     const b = setup({ explain });
     const { message } = await b.coach.onUserMove(b.game, b.game.play('e1e2'));
@@ -567,7 +578,9 @@ describe('Coach post_move', () => {
     await flush();
     const q = explain.mock.calls[1][0];
     expect(q.facts.playedMoveIs).toBe('top');
-    expect(q.reasons).toBeDefined();
+    // A king step this early earns no checked reason: the packet says so, and the template falls back.
+    expect(q.reasons).toEqual({ opening: null, principle: null, fundamentals: [], effect: null });
+    expect(q.template.whatHappened).toBe("It keeps the engine's preferred plan going: Ke2, Ke7.");
     expect(q.bestReasons).toBeNull();
   });
 
