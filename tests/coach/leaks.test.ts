@@ -10,6 +10,10 @@ describe('moveLeaks', () => {
     'Castle now.',
     'Nf3 is strong.',
     'capture the pawn on e5',
+    // T1 regressions: lower-case piece letter, an annotation mark, a bare SAN as the subject.
+    'Try nf3 here.',
+    'Nxe5! wins a pawn.',
+    'exd5 is the move.',
   ])('flags %s', (t) => {
     expect(moveLeaks(t).length).toBeGreaterThan(0);
   });
