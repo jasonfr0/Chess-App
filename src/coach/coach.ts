@@ -285,7 +285,8 @@ export class Coach {
     const message: CoachMessage = { ...post.message, explained: true };
     post.message = message;
     this.emit(message);
-    if (ctx.kind !== 'top') return; // book moves keep the repertoire's own idea text
+    // Book moves are not sent to Claude: their template already ends with the repertoire's own idea.
+    if (ctx.kind !== 'top') return;
     this.publish(message, () => buildPacket('post_move', ctx, message.explanation, this.deps.profile()),
       () => this.post === post, { onUpgrade: (upgraded) => { post.message = upgraded; } });
   }

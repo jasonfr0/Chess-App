@@ -67,7 +67,10 @@ describe('postMoveTemplate', () => {
     expect(t.summary).toBe('✓ Book move. Do you see why?');
     expect(t.explanation.whatHappened).toContain('e4 puts your pawn on the middle square e4.');
     expect(t.explanation.whatHappened).toContain('Italian Game');
-    expect(t.explanation.whatHappened).toContain(FUNDAMENTAL_WHY.centre);
+    // A book move keeps its opening idea (first sentence only) instead of the fundamental "why".
+    expect(t.explanation.whatHappened).toContain('Claim the centre.');
+    expect(t.explanation.whatHappened).not.toContain('Then develop');
+    expect(t.explanation.whatHappened).not.toContain(FUNDAMENTAL_WHY.centre);
   });
   it('book falls back to the node idea when there are no checked reasons', () => {
     const none = { opening: null, principle: null, fundamentals: [], effect: null };

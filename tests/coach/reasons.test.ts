@@ -122,7 +122,7 @@ describe('deriveReasons', () => {
       const t = reasonText('x', deriveReasons(START, uci, noBook))!;
       expect(t).toContain(why);
       expect(t).not.toMatch(/rule:/);
-      expect(sentences(t)).toBeLessThanOrEqual(2);
+      expect(sentences(t)).toBeLessThanOrEqual(3);
     }
     const castle = fenOf(['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Bc5']);
     const t = reasonText('O-O', deriveReasons(castle, 'e1g1', noBook))!;
@@ -264,6 +264,49 @@ describe('deriveReasons', () => {
     const t = reasonText('Bc4', r);
     expect(t).toContain('Italian');
     expect(sentences(t)).toBeLessThanOrEqual(3);
+  });
+
+  it('a book move keeps its opening idea as the third sentence (no fundamental why)', () => {
+    const sans = ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4'];
+    const r = deriveReasons(fenOf(sans.slice(0, 4)), 'f1c4', { book: lookup('w', sans), area: 'opening' });
+    const t = reasonText('Bc4', r)!;
+    expect(t).toContain('f7');
+    expect(t).not.toContain(FUNDAMENTAL_WHY[r.fundamentals[0]]);
+    expect(sentences(t)).toBeLessThanOrEqual(3);
+    const black = deriveReasons(fenOf(['e4']), 'e7e5', { book: lookup('b', ['e4', 'e5']), area: 'opening' });
+    expect(black.opening).not.toBeNull();
+    const tb = reasonText('e5', black)!;
+    expect(tb).toContain('opens lines for your queen');
+    expect(tb).not.toContain('Next,');
+    expect(sentences(tb)).toBeLessThanOrEqual(3);
+  });
+
+  it('never joins two parts with a comma; the why matches the part shown first', () => {
+    const fen = '7k/pp4pp/8/1r6/b7/8/PP2N1PP/6K1 w - - 0 20';
+    const r = deriveReasons(fen, 'e2c3', { book: null, area: 'middlegame' });
+    expect(r.effect).toBe('attacks their bishop on a4 and their rook on b5');
+    expect(r.fundamentals[0]).toBe('attacks');
+    const t = reasonText('Nc3', r)!;
+    expect(t.split('. ')[0]).not.toContain(',');
+    expect(t).not.toContain('aims at');
+    expect(t).toContain(FUNDAMENTAL_WHY.attacks);
+    expect(t).not.toContain(FUNDAMENTAL_WHY.centre);
+    expect(sentences(t)).toBeLessThanOrEqual(3);
+  });
+
+  it('puts a second part in an "It also" sentence when it still fits in 3 sentences', () => {
+    const r = deriveReasons(START, 'g1f3', noBook);
+    expect(r.effect).toBe('brings your knight out');
+    expect(r.also).toBe('aims at the middle squares d4 and e5');
+    expect(reasonText('Nf3', r)).toBe(
+      `Nf3 brings your knight out. It also aims at the middle squares d4 and e5. ${FUNDAMENTAL_WHY.develops}`,
+    );
+  });
+
+  it('reasonText has no separate opening-principle sentence', () => {
+    const t = reasonText('Nc3', { opening: null, principle: 'some rule', fundamentals: ['attacks'], effect: 'attacks their pawn on e5' });
+    expect(t).not.toContain('some rule');
+    expect(t).toContain('It follows a simple rule: put pressure on their pieces.');
   });
 
   it('ignores a book hit for a different move', () => {

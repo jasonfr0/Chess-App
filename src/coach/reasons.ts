@@ -18,6 +18,8 @@ export interface Reasons {
   principle: string | null;
   fundamentals: Fundamental[];
   effect: string | null;
+  /** A second thing the move does, said as "It also …" when that still fits in 3 sentences. */
+  also?: string;
   /** The move gives checkmate. */
   checkmate?: boolean;
   /** The piece a pawn promotes to. */
@@ -55,7 +57,7 @@ const RULE: Record<Fundamental, string> = {
 /** Ideas whose "why" sentence already states the rule, so naming the rule too would repeat it. */
 const SELF_EXPLAINED: ReadonlySet<Fundamental> = new Set(['develops', 'centre', 'king_safety']);
 
-/** Opening principles, named when out of book in the opening. */
+/** Opening principles, named when out of book in the opening (sent to Claude; the template's "why" already says it). */
 const PRINCIPLE: Partial<Record<Fundamental, string>> = {
   king_safety: 'castle early to keep your king safe',
   develops: 'get your knights and bishops out before your queen',
@@ -309,24 +311,28 @@ export function deriveReasons(
 
   const fundamentals = PRIORITY.filter((f) => found.has(f));
 
-  // What it does here: an action, then (at most) one consequence.
-  let action: string | null = null;
-  const consequences: string[] = [];
-  if (mate) action = 'gives checkmate';
+  // What it does here: an action, then (at most) one consequence. Each part carries the idea it shows.
+  type Part = { text: string; f: Fundamental | null };
+  let action: Part | null = null;
+  const consequences: Part[] = [];
+  const say = (text: string, f: Fundamental | null): Part => ({ text, f });
+  if (mate) action = say('gives checkmate', 'check_threat');
   else if (m.captured) {
-    action = moveNote(fenBefore, m);
-    if (m.promotion) action += ` and becomes a ${NAMES[m.promotion as PieceRef['piece']]}`;
-    else if (gain !== null && gain >= VALUE[m.captured]) action += ' for free';
-    else if (gain !== null && gain > 0) consequences.push(ahead(gain));
-  } else if (castle) action = 'castles';
-  else if (m.promotion) action = `turns your pawn into a ${NAMES[m.promotion]}`;
-  else if (found.has('develops')) action = `brings your ${NAMES[m.piece]} out`;
-  else if (found.has('king_activity')) action = 'brings your king toward the middle';
-  else if (found.has('passed_pawn')) action = 'pushes a pawn that no enemy pawn can block or take';
-  else if (occupiesCentre && opts.area !== 'endgame') action = `puts your ${NAMES[m.piece]} on the middle square ${m.to}`;
+    let text = moveNote(fenBefore, m);
+    let f: Fundamental | null = found.has('trade_when_ahead') ? 'trade_when_ahead' : null;
+    if (m.promotion) text += ` and becomes a ${NAMES[m.promotion as PieceRef['piece']]}`;
+    else if (gain !== null && gain >= VALUE[m.captured]) { text += ' for free'; f = 'wins_material'; }
+    else if (gain !== null && gain > 0) consequences.push(say(ahead(gain), 'wins_material'));
+    action = say(text, f);
+  } else if (castle) action = say('castles', 'king_safety');
+  else if (m.promotion) action = say(`turns your pawn into a ${NAMES[m.promotion]}`, null);
+  else if (found.has('develops')) action = say(`brings your ${NAMES[m.piece]} out`, 'develops');
+  else if (found.has('king_activity')) action = say('brings your king toward the middle', 'king_activity');
+  else if (found.has('passed_pawn')) action = say('pushes a pawn that no enemy pawn can block or take', 'passed_pawn');
+  else if (occupiesCentre && opts.area !== 'endgame') action = say(`puts your ${NAMES[m.piece]} on the middle square ${m.to}`, 'centre');
   if (!mate) {
-    if (check) consequences.push('gives check');
-    if (mateThreat) consequences.push('threatens checkmate');
+    if (check) consequences.push(say('gives check', 'check_threat'));
+    if (mateThreat) consequences.push(say('threatens checkmate', 'check_threat'));
     // A piece of ours that could be won before, and no longer can (moved away, guarded or freed).
     // Never while giving check: with the opponent in check, legal captures are limited, so "not
     // hanging" proves nothing. With a line, the piece must also survive the reply.
@@ -341,27 +347,46 @@ export function deriveReasons(
       return !hangingAfter.some((q) => q.square === now) && !hangingAfterReply.some((q) => q.square === now) &&
         !defended.some((d) => d.square === p.square);
     });
-    if (saved.length > 0) consequences.push(`deals with the threat to your ${NAMES[saved[0].piece]} on ${saved[0].square}`);
-    if (givesKingSquare(before, after, m)) consequences.push('gives your king a safe square');
-    if (defended.length > 0) consequences.push(`defends ${joinAnd(defended.slice(0, 2).map((p) => `your ${NAMES[p.piece]} on ${p.square}`))}`);
-    if (attacked.length > 0) consequences.push(`attacks ${joinAnd(attacked.slice(0, 2).map((p) => `their ${NAMES[p.piece]} on ${p.square}`))}`);
+    if (saved.length > 0) consequences.push(say(`deals with the threat to your ${NAMES[saved[0].piece]} on ${saved[0].square}`, null));
+    if (givesKingSquare(before, after, m)) consequences.push(say('gives your king a safe square', null));
+    if (defended.length > 0) consequences.push(say(`defends ${joinAnd(defended.slice(0, 2).map((p) => `your ${NAMES[p.piece]} on ${p.square}`))}`, 'defends'));
+    if (attacked.length > 0) consequences.push(say(`attacks ${joinAnd(attacked.slice(0, 2).map((p) => `their ${NAMES[p.piece]} on ${p.square}`))}`, 'attacks'));
     if (aimsAt.length > 0 && opts.area !== 'endgame') {
-      consequences.push(`aims at the middle square${aimsAt.length > 1 ? 's' : ''} ${joinAnd([...aimsAt].sort())}`);
+      consequences.push(say(`aims at the middle square${aimsAt.length > 1 ? 's' : ''} ${joinAnd([...aimsAt].sort())}`, 'centre'));
     }
   }
-  const parts = (action ? [action, ...consequences.slice(0, 1)] : consequences.slice(0, 2));
-  // One "and" per sentence: parts that already contain one are joined with a comma.
-  const effect = parts.length === 0 ? null
-    : parts.some((p) => p.includes(' and ')) ? parts.join(', ') : parts.join(' and ');
+  const parts = (action ? [action, ...consequences.slice(0, 1)] : consequences.slice(0, 2))
+    .map((p) => (p.f && found.has(p.f) ? p : { ...p, f: null }));
 
   const hit = opts.book && stripCheck(opts.book.node.san) === stripCheck(m.san) && opts.book.lineName
     ? { name: opts.book.lineName, idea: opts.book.node.idea }
     : null;
+  // One "and" per sentence, never a comma splice: two plain parts share sentence 1; if either
+  // already has an "and", the second becomes "It also …", but only while the text stays at 3
+  // sentences (an opening or a rule sentence leaves no room, so it is dropped).
+  const fits = (lead: Fundamental | undefined) =>
+    !hit && (Boolean(m.promotion) || !lead || SELF_EXPLAINED.has(lead));
+  let lead: Fundamental | undefined = parts[0]?.f ?? undefined;
+  let effect = parts[0]?.text ?? null;
+  let also: string | undefined;
+  if (parts[1]) {
+    const leadWithSecond = lead ?? parts[1].f ?? fundamentals[0];
+    if (!parts.some((p) => p.text.includes(' and '))) {
+      effect = `${effect} and ${parts[1].text}`;
+      lead = leadWithSecond;
+    } else if (fits(leadWithSecond)) {
+      also = parts[1].text;
+      lead = leadWithSecond;
+    }
+  }
+  lead ??= fundamentals[0];
+  // The "why" matches the idea shown first, so that idea leads the list.
+  const ordered = lead ? [lead, ...fundamentals.filter((f) => f !== lead)] : fundamentals;
   // Only the rule behind the main reason, so the "why" that follows matches it.
-  const main = fundamentals[0];
-  const principle = !hit && opts.area === 'opening' && main && PRINCIPLE[main] ? PRINCIPLE[main]! : null;
+  const principle = !hit && opts.area === 'opening' && lead && PRINCIPLE[lead] ? PRINCIPLE[lead]! : null;
 
-  const out: Reasons = { opening: hit, principle, fundamentals, effect };
+  const out: Reasons = { opening: hit, principle, fundamentals: ordered, effect };
+  if (also) out.also = also;
   if (mate) out.checkmate = true;
   if (m.promotion) out.promotion = m.promotion as Reasons['promotion'];
   return out;
@@ -372,7 +397,8 @@ export function firstSentence(text: string): string {
 }
 
 /**
- * At most 3 sentences: what it does here, then the opening or rule, then why that idea works.
+ * At most 3 sentences: what it does here (and, room allowing, what else it does), then the opening
+ * and its idea, or the rule and why that idea works.
  * Null when no checked fact is available: callers then show no explanation rather than filler.
  */
 export function reasonText(san: string, r: Reasons): string | null {
@@ -383,14 +409,16 @@ export function reasonText(san: string, r: Reasons): string | null {
   if (r.effect) out.push(`${san} ${r.effect}.`);
   else if (r.opening) out.push(`${san} is part of the ${r.opening.name}.`);
   else return null; // a rule with nothing concrete to say about this game is filler
+  if (r.also && !r.opening) out.push(`It also ${r.also}.`);
   if (r.promotion) return [...out, PROMOTION_WHY[r.promotion]].join(' ');
 
-  if (r.opening) out.push(r.effect ? `It's part of the ${r.opening.name}.` : idea!);
-  else if (primary && SELF_EXPLAINED.has(primary)) { /* the "why" below already states the rule */ }
-  else if (r.principle) out.push(`It follows a key opening rule: ${r.principle}.`);
-  else if (primary) out.push(`It follows a simple rule: ${RULE[primary]}.`);
-
-  if (primary) out.push(FUNDAMENTAL_WHY[primary]);
-  else if (r.opening && r.effect && idea) out.push(idea);
-  return out.join(' ');
+  // A book move keeps its opening's own idea; the fundamental "why" is only for moves out of book.
+  if (r.opening) {
+    if (r.effect) out.push(`It's part of the ${r.opening.name}.`);
+    out.push(idea!);
+  } else if (primary) {
+    if (!SELF_EXPLAINED.has(primary)) out.push(`It follows a simple rule: ${RULE[primary]}.`);
+    out.push(FUNDAMENTAL_WHY[primary]);
+  }
+  return out.slice(0, 3).join(' ');
 }
