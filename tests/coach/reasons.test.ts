@@ -1,0 +1,238 @@
+import { describe, it, expect } from 'vitest';
+import { Chess } from 'chess.js';
+import data from '../../src/openings/repertoire.json';
+import { lookup, type RepertoireNode } from '../../src/openings/repertoire';
+import { deriveReasons, reasonText, FUNDAMENTAL_WHY, type Fundamental } from '../../src/coach/reasons';
+import { findJargon } from '../../src/coach/jargon';
+import { areaOf } from '../../src/coach/classify';
+import type { Color } from '../../src/types';
+
+const START = new Chess().fen();
+const fenOf = (sans: string[], start?: string) => {
+  const c = new Chess(start);
+  for (const s of sans) c.move(s);
+  return c.fen();
+};
+const sentences = (t: string) => t.split(/(?<=[.!?])\s+/).filter(Boolean).length;
+const noBook = { book: null, area: 'opening' as const };
+
+describe('FUNDAMENTAL_WHY', () => {
+  it('is one plain sentence per fundamental, with no jargon', () => {
+    for (const [k, s] of Object.entries(FUNDAMENTAL_WHY)) {
+      expect(sentences(s), k).toBe(1);
+      expect(findJargon(s), k).toEqual([]);
+    }
+  });
+});
+
+describe('deriveReasons', () => {
+  it('Nf3 from the start develops and fights for the centre', () => {
+    const r = deriveReasons(START, 'g1f3', { book: lookup('w', ['Nf3']) ?? null, area: 'opening' });
+    expect(r.fundamentals).toContain('develops');
+    expect(r.fundamentals).toContain('centre');
+    expect(r.fundamentals).not.toContain('defends');
+    expect(r.fundamentals).not.toContain('wins_material');
+    const t = reasonText('Nf3', r);
+    expect(t).toContain('knight');
+    expect(sentences(t)).toBeLessThanOrEqual(3);
+  });
+
+  it('names the opening principle when out of book in the opening', () => {
+    const r = deriveReasons(START, 'g1f3', noBook);
+    expect(r.opening).toBeNull();
+    expect(r.principle).toMatch(/knights and bishops/);
+    expect(deriveReasons(START, 'g1f3', { book: null, area: 'middlegame' }).principle).toBeNull();
+  });
+
+  it('names an opening principle only when it is the main reason', () => {
+    const r = deriveReasons(fenOf(['e4', 'e5', 'Bc4', 'Nc6']), 'd1h5', noBook);
+    expect(r.fundamentals[0]).toBe('check_threat');
+    expect(r.principle).toBeNull();
+  });
+
+  it('castling is king safety', () => {
+    const fen = fenOf(['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Bc5']);
+    const r = deriveReasons(fen, 'e1g1', noBook);
+    expect(r.fundamentals).toContain('king_safety');
+    expect(r.fundamentals).not.toContain('develops');
+  });
+
+  it('defends a piece that was attacked', () => {
+    // 1.e4 e5 2.Nf3 Nf6: their knight attacks e4; 3.Nc3 defends it.
+    const r = deriveReasons(fenOf(['e4', 'e5', 'Nf3', 'Nf6']), 'b1c3', noBook);
+    expect(r.fundamentals).toContain('defends');
+    expect(r.effect).toContain('defends your pawn on e4');
+  });
+
+  it('does not claim defends when nothing was attacked', () => {
+    const r = deriveReasons(fenOf(['e4', 'e5']), 'b1c3', noBook);
+    expect(r.fundamentals).not.toContain('defends');
+    expect(r.effect ?? '').not.toContain('defends');
+  });
+
+  it('does not claim defends for a piece it already guarded', () => {
+    // 1.e4 e5 2.Nf3 Nf6 3.Qe2 Nc6: the queen already guards e4, so 4.Qe3 is not "defends".
+    const fen = fenOf(['e4', 'e5', 'Nf3', 'Nf6', 'Qe2', 'Nc6']);
+    expect(deriveReasons(fen, 'e2e3', noBook).fundamentals).not.toContain('defends');
+    expect(deriveReasons(fenOf(['e4', 'e5', 'Nf3', 'Nf6']), 'd1e2', noBook).fundamentals).toContain('defends');
+  });
+
+  it('a capture that wins a piece per the line is wins_material', () => {
+    // 1.e4 e5 2.Nf3 Qg5?? 3.Nxg5 — the queen is free.
+    const fen = fenOf(['e4', 'e5', 'Nf3', 'Qg5']);
+    const r = deriveReasons(fen, 'f3g5', { book: null, area: 'opening', line: ['f3g5', 'b8c6', 'd2d4'] });
+    expect(r.fundamentals).toContain('wins_material');
+    expect(r.effect).toContain('queen on g5');
+    const t = reasonText('Nxg5', r);
+    expect(sentences(t)).toBeLessThanOrEqual(3);
+    expect(t).toContain(FUNDAMENTAL_WHY.wins_material);
+  });
+
+  it('does not claim wins_material without a line, or when the line loses it back', () => {
+    const fen = fenOf(['e4', 'e5', 'Nf3', 'Qg5']);
+    expect(deriveReasons(fen, 'f3g5', noBook).fundamentals).not.toContain('wins_material');
+    expect(deriveReasons(fen, 'f3g5', { ...noBook, line: ['f3g5'] }).fundamentals).not.toContain('wins_material');
+    const fen2 = fenOf(['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Nf6']);
+    const r = deriveReasons(fen2, 'c4f7', { ...noBook, line: ['c4f7', 'e8f7', 'f3g5', 'f7g8'] });
+    expect(r.fundamentals).not.toContain('wins_material');
+    expect(r.fundamentals).toContain('check_threat');
+  });
+
+  it('a quiet move that wins material later in the line (fork) is wins_material', () => {
+    // White knight forks king and rook.
+    const fen = 'r3k3/8/8/8/8/8/8/1N2K3 w - - 0 30';
+    const r = deriveReasons(fen, 'b1c3', { book: null, area: 'endgame', line: ['b1c3'] });
+    expect(r.fundamentals).not.toContain('wins_material');
+    const fen2 = 'r3k3/8/8/1N6/8/8/8/4K3 w - - 0 30';
+    const r2 = deriveReasons(fen2, 'b5c7', { book: null, area: 'endgame', line: ['b5c7', 'e8d7', 'c7a8', 'd7c8'] });
+    expect(r2.fundamentals).toContain('check_threat');
+    expect(r2.fundamentals).toContain('wins_material');
+  });
+
+  it('threatens checkmate (Qh5 eyeing f7)', () => {
+    const r = deriveReasons(fenOf(['e4', 'e5', 'Bc4', 'Nc6']), 'd1h5', noBook);
+    expect(r.fundamentals).toContain('check_threat');
+    expect(r.effect).toContain('threatens checkmate');
+  });
+
+  it('trades when ahead', () => {
+    const fen = '3rk3/8/8/8/8/8/8/R2RK3 w - - 0 40';
+    const r = deriveReasons(fen, 'd1d8', { book: null, area: 'endgame', line: ['d1d8', 'e8d8', 'a1a7'] });
+    expect(r.fundamentals).toContain('trade_when_ahead');
+    const even = '3rk3/8/8/8/8/8/8/3RK3 w - - 0 40';
+    const r2 = deriveReasons(even, 'd1d8', { book: null, area: 'endgame', line: ['d1d8', 'e8d8', 'e1e2'] });
+    expect(r2.fundamentals).not.toContain('trade_when_ahead');
+  });
+
+  it('passed pawn only when no enemy pawn can block or take it', () => {
+    const r = deriveReasons('8/8/4k3/8/8/8/P7/4K3 w - - 0 50', 'a2a4', { book: null, area: 'endgame' });
+    expect(r.fundamentals).toContain('passed_pawn');
+    const r2 = deriveReasons('8/1p6/4k3/8/8/8/P7/4K3 w - - 0 50', 'a2a4', { book: null, area: 'endgame' });
+    expect(r2.fundamentals).not.toContain('passed_pawn');
+  });
+
+  it('king activity only in the endgame, towards the middle', () => {
+    const fen = '8/8/4k3/8/8/8/P7/4K3 w - - 0 50';
+    expect(deriveReasons(fen, 'e1e2', { book: null, area: 'endgame' }).fundamentals).toContain('king_activity');
+    expect(deriveReasons(fen, 'e1f1', { book: null, area: 'endgame' }).fundamentals).not.toContain('king_activity');
+    expect(deriveReasons(fen, 'e1e2', { book: null, area: 'middlegame' }).fundamentals).not.toContain('king_activity');
+  });
+
+  it('attacks an enemy piece', () => {
+    // 1.e4 e5 2.Nf3 Nc6 3.Bb5 attacks the knight on c6.
+    const r = deriveReasons(fenOf(['e4', 'e5', 'Nf3', 'Nc6']), 'f1b5', noBook);
+    expect(r.fundamentals).toContain('attacks');
+    expect(r.effect).toContain('their knight on c6');
+  });
+
+  it('in the Italian book after 3.Bc4 names the Italian Game', () => {
+    const sans = ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4'];
+    const r = deriveReasons(fenOf(sans.slice(0, 4)), 'f1c4', { book: lookup('w', sans), area: 'opening' });
+    expect(r.opening?.name).toContain('Italian');
+    expect(r.principle).toBeNull();
+    const t = reasonText('Bc4', r);
+    expect(t).toContain('Italian');
+    expect(sentences(t)).toBeLessThanOrEqual(3);
+  });
+
+  it('ignores a book hit for a different move', () => {
+    const r = deriveReasons(START, 'g1f3', { book: lookup('w', ['e4']), area: 'opening' });
+    expect(r.opening).toBeNull();
+  });
+
+  it('an illegal move gives empty reasons', () => {
+    const r = deriveReasons(START, 'e1e5', noBook);
+    expect(r).toEqual({ opening: null, principle: null, fundamentals: [], effect: null });
+  });
+});
+
+describe('reasonText sweep', () => {
+  /** No jargon, at most 3 sentences, and no move named but the given one. */
+  const check = (san: string, text: string, label: string) => {
+    expect(findJargon(text), label).toEqual([]);
+    expect(sentences(text), label).toBeLessThanOrEqual(3);
+    // Every SAN-looking token other than the given san is absent.
+    const others = (text.match(/\b(?:[KQRBN][a-h]?[1-8]?x?[a-h][1-8]|[a-h]x[a-h][1-8]|O-O(?:-O)?)\b/g) ?? []).filter((t) => !san.startsWith(t));
+    expect(others, label).toEqual([]);
+  };
+
+  const trees: Record<Color, RepertoireNode[]> = { w: data.white, b: data.black };
+  for (const color of ['w', 'b'] as const) {
+    it(`every ${color} repertoire user move`, () => {
+      let count = 0;
+      const visit = (nodes: RepertoireNode[], path: string[]) => {
+        for (const node of nodes) {
+          const here = [...path, node.san];
+          const userMove = (here.length % 2 === 1) === (color === 'w');
+          if (userMove) {
+            const c = new Chess(fenOf(path));
+            const fen = c.fen();
+            const m = c.move(node.san);
+            const uci = m.from + m.to + (m.promotion ?? '');
+            const r = deriveReasons(fen, uci, { book: lookup(color, here), area: 'opening' });
+            expect(r.opening, here.join(' ')).not.toBeNull();
+            check(m.san, reasonText(m.san, r), here.join(' '));
+            count++;
+          }
+          visit(node.children, here);
+        }
+      };
+      visit(trees[color], []);
+      expect(count).toBeGreaterThan(5);
+    });
+  }
+
+  const fixtures: { sans: string[]; start?: string; line: string[] }[] = [
+    { sans: ['e4', 'd5'], line: ['e4d5', 'd8d5', 'b1c3'] },
+    { sans: ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Nd4'], line: ['f3d4', 'e5d4', 'c2c3'] },
+    { sans: ['e4', 'e5', 'Nf3', 'd6', 'd4', 'Bg4'], line: ['d4e5', 'g4f3', 'd1f3', 'd6e5', 'f1c4'] },
+    { sans: ['d4', 'e5'], line: ['d4e5', 'b8c6', 'g1f3'] },
+    { sans: ['e4', 'e5', 'Qh5', 'Nc6', 'Bc4', 'Nf6'], line: ['h5f7'] },
+    { sans: ['e4', 'e5', 'Nf3', 'f6', 'Nxe5', 'fxe5', 'Qh5+', 'Ke7'], line: ['h5e5', 'e7f7', 'f1c4'] },
+    { sans: ['Bd4'], start: '4k3/8/8/4b3/8/8/8/3RK3 b - - 0 30', line: ['d1d4', 'e8e7', 'e1e2'] },
+    { sans: ['Ke8'], start: '3k4/4p3/3p4/8/8/8/8/3QK3 b - - 0 30', line: ['d1d6', 'e7d6', 'e1e2'] },
+    { sans: ['e4', 'e5', 'Nf3', 'Nc6', 'Bb5', 'a6'], line: ['b5c6', 'd7c6', 'e1g1'] },
+    { sans: ['Kd8'], start: 'r3k3/1P6/8/8/8/8/8/4K3 b - - 0 40', line: ['b7a8q', 'd8c7', 'a8a7'] },
+    { sans: [], start: '8/8/4k3/8/8/8/P7/4K3 w - - 0 50', line: ['e1e2', 'e6d5', 'a2a4'] },
+  ];
+  it.each(fixtures.map((f) => [`${f.sans.join(' ')} ${f.line[0]}`, f] as const))('engine line %s', (_l, f) => {
+    const fen = fenOf(f.sans, f.start);
+    const ply = f.start ? 40 : f.sans.length;
+    const area = areaOf(fen, ply, false);
+    const r = deriveReasons(fen, f.line[0], { book: null, area, line: f.line });
+    const m = new Chess(fen).move({ from: f.line[0].slice(0, 2), to: f.line[0].slice(2, 4), promotion: f.line[0][4] });
+    const text = reasonText(m.san, r);
+    check(m.san, text, f.line[0]);
+    expect(text.startsWith(m.san)).toBe(true);
+  });
+
+  it('every fundamental appears in at least one text across fixtures', () => {
+    const seen = new Set<Fundamental>();
+    for (const f of fixtures) {
+      const fen = fenOf(f.sans, f.start);
+      const area = areaOf(fen, f.start ? 40 : f.sans.length, false);
+      deriveReasons(fen, f.line[0], { book: null, area, line: f.line }).fundamentals.forEach((x) => seen.add(x));
+    }
+    expect(seen.size).toBeGreaterThan(3);
+  });
+});

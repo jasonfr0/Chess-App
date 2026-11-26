@@ -31,7 +31,7 @@ export const THEME_LESSONS: Record<Theme, { title: string; habit: string }> = {
   other: { title: 'Better move available', habit: 'Compare your move with the alternatives before you play it.' },
 };
 
-const NAMES: Record<PieceRef['piece'], string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
+export const NAMES: Record<PieceRef['piece'], string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
 const describe = (p: PieceRef, viewer: Color) => `${p.color === viewer ? 'your' : 'their'} ${NAMES[p.piece]} on ${p.square}`;
