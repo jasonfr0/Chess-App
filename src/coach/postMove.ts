@@ -115,6 +115,6 @@ export function revealTemplate(ctx: RevealContext, factsAfter: PositionFacts): {
   const mistakeCtx: MistakeContext = { verdict, move, factsAfter, themeCount: 0 };
   return {
     summary: `The better move was ${verdict.bestSan}.`,
-    explanation: { whatHappened: reasonText(verdict.bestSan, ctx.bestReasons) ?? betterReason(mistakeCtx) },
+    explanation: { whatHappened: reasonText(verdict.bestSan, ctx.bestReasons, { past: true }) ?? betterReason(mistakeCtx) },
   };
 }

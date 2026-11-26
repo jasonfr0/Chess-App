@@ -796,7 +796,6 @@ describe('Coach.showMe and playOnReveal', () => {
     expect(again.explanation.whatHappened).toBe('Ke2 walks your king up.');
   });
 
-
   const expectReveal = (m: CoachMessage | null) => {
     expect(m?.kind).toBe('post_move');
     expect(m?.summary).toBe('The better move was Ke2.');

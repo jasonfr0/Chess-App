@@ -392,6 +392,22 @@ export function deriveReasons(
   return out;
 }
 
+/** Past participles of the verbs an effect starts its clauses with. */
+const PAST: Record<string, string> = {
+  gives: 'given', takes: 'taken', captures: 'captured', castles: 'castled', turns: 'turned', brings: 'brought',
+  pushes: 'pushed', puts: 'put', threatens: 'threatened', deals: 'dealt', defends: 'defended', attacks: 'attacked',
+  aims: 'aimed', comes: 'come', becomes: 'become', wins: 'won', develops: 'developed', checkmates: 'checkmated',
+};
+
+/** "brings your knight out and attacks …" → "would have brought your knight out and attacked …". */
+function wouldHave(predicate: string): string {
+  const clauses = predicate.split(' and ').map((c) => {
+    const [verb, ...rest] = c.split(' ');
+    return PAST[verb] ? [PAST[verb], ...rest].join(' ') : c;
+  });
+  return `would have ${clauses.join(' and ')}`;
+}
+
 export function firstSentence(text: string): string {
   return /^.*?[.!?](?=\s|$)/.exec(text.trim())?.[0] ?? text.trim();
 }
@@ -400,16 +416,21 @@ export function firstSentence(text: string): string {
  * At most 3 sentences: what it does here (and, room allowing, what else it does), then the opening
  * and its idea, or the rule and why that idea works.
  * Null when no checked fact is available: callers then show no explanation rather than filler.
+ * `past`: for a reveal of a move that was not played ("Nf3 would have brought your knight out").
  */
-export function reasonText(san: string, r: Reasons): string | null {
-  if (r.checkmate) return `${san} is checkmate. That ends the game: you win.`;
+export function reasonText(san: string, r: Reasons, opts: { past?: boolean } = {}): string | null {
+  // A reveal speaks of a move that was not played, in the position before the user's move.
+  const past = opts.past === true;
+  if (r.checkmate) {
+    return past ? `${san} would have been checkmate. That would have won the game.` : `${san} is checkmate. That ends the game: you win.`;
+  }
   const primary = r.fundamentals[0];
   const idea = r.opening ? firstSentence(r.opening.idea) : null;
   const out: string[] = [];
-  if (r.effect) out.push(`${san} ${r.effect}.`);
+  if (r.effect) out.push(`${san} ${past ? wouldHave(r.effect) : r.effect}.`);
   else if (r.opening) out.push(`${san} is part of the ${r.opening.name}.`);
   else return null; // a rule with nothing concrete to say about this game is filler
-  if (r.also && !r.opening) out.push(`It also ${r.also}.`);
+  if (r.also && !r.opening) out.push(past ? `It would also ${wouldHave(r.also).replace(/^would /, '')}.` : `It also ${r.also}.`);
   if (r.promotion) return [...out, PROMOTION_WHY[r.promotion]].join(' ');
 
   // A book move keeps its opening's own idea; the fundamental "why" is only for moves out of book.

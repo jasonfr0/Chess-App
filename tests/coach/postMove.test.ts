@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
-import { topMoveKind, postMoveTemplate } from '../../src/coach/postMove';
+import { topMoveKind, postMoveTemplate, revealTemplate } from '../../src/coach/postMove';
 import type { PostMoveContext } from '../../src/coach/postMove';
 import { positionFacts } from '../../src/coach/facts';
 import type { Analysis } from '../../src/types';
 import type { Verdict } from '../../src/coach/classify';
-import { FUNDAMENTAL_WHY, deriveReasons } from '../../src/coach/reasons';
+import { FUNDAMENTAL_WHY, deriveReasons, reasonText } from '../../src/coach/reasons';
 import { BANNED_TERMS, findJargon } from '../../src/coach/jargon';
 import { betterReason } from '../../src/coach/templates';
 
@@ -152,5 +152,41 @@ describe('postMoveTemplate', () => {
     const t = postMoveTemplate(ctx(start, 'a3', {}, { bestSan: 'e4', bestUci: 'e2e4', refutationSan: ['e5', 'Nf3', 'Nc6'] }));
     expect(t.explanation.whatHappened).toBe('After a3, their best answer is e5.');
     expect(t.explanation.whatHappened).not.toContain('Nf3');
+  });
+});
+
+describe('revealTemplate', () => {
+  const start = new Chess().fen();
+  const reveal = (fen: string, playedSan: string, bestUci: string, bestSan: string, line?: string[]) => {
+    const c = ctx(fen, playedSan, {}, { bestUci, bestSan, flagged: true, severity: 'mistake' });
+    const bestReasons = deriveReasons(fen, bestUci, { book: null, area: 'opening', line });
+    return revealTemplate({ verdict: c.verdict, move: c.move, bestReasons }, c.factsAfter).explanation.whatHappened;
+  };
+
+  it('speaks of the better move in the past conditional', () => {
+    const t = reveal(start, 'a3', 'g1f3', 'Nf3');
+    expect(t).toMatch(/^Nf3 would have brought your knight out\./);
+    expect(t).toContain('It would also have aimed at the middle squares d4 and e5.');
+    expect(t).not.toMatch(/\bbrings\b|\baims\b/);
+  });
+
+  it('"would have attacked" for an attack', () => {
+    const fen = '7k/pp4pp/8/1r6/b7/8/PP2N1PP/6K1 w - - 0 20';
+    const c = ctx(fen, 'h3', {}, { bestUci: 'e2c3', bestSan: 'Nc3', area: 'middlegame' });
+    const bestReasons = deriveReasons(fen, 'e2c3', { book: null, area: 'middlegame' });
+    const t = revealTemplate({ verdict: c.verdict, move: c.move, bestReasons }, c.factsAfter).explanation.whatHappened;
+    expect(t).toMatch(/^Nc3 would have attacked their bishop on a4 and their rook on b5\./);
+  });
+
+  it('a capture that comes out ahead', () => {
+    const fen = '4k3/3q4/8/8/8/8/8/3RK3 w - - 0 40';
+    const c = ctx(fen, 'Ke2', {}, { bestUci: 'd1d7', bestSan: 'Rxd7+', area: 'endgame' });
+    const bestReasons = deriveReasons(fen, 'd1d7', { book: null, area: 'endgame', line: ['d1d7', 'e8d7', 'e1e2'] });
+    const t = revealTemplate({ verdict: c.verdict, move: c.move, bestReasons }, c.factsAfter).explanation.whatHappened;
+    expect(t).toMatch(/^Rxd7\+ would have captured the queen on d7 and come out more than a piece ahead\./);
+  });
+
+  it('the post-move text for a played move stays in the present', () => {
+    expect(reasonText('Nf3', deriveReasons(start, 'g1f3', { book: null, area: 'opening' }))).toMatch(/^Nf3 brings your knight out\./);
   });
 });
