@@ -4,7 +4,7 @@ import data from '../../src/openings/repertoire.json';
 import { lookup, rootPlan, type BookHit, type RepertoireNode } from '../../src/openings/repertoire';
 import { positionFacts } from '../../src/coach/facts';
 import { moveLeaks } from '../../src/coach/leaks';
-import { HABIT_QUESTIONS, preMoveCoaching, type QuestionContext } from '../../src/coach/questions';
+import { HABIT_QUESTIONS, namedSquares, preMoveCoaching, type QuestionContext } from '../../src/coach/questions';
 import type { Analysis, Color, EngineLine, PlayedMove } from '../../src/types';
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -423,5 +423,20 @@ describe('nudge highlight', () => {
     expectHighlightMatchesText(ctxFrom(['e4', 'e5']), 'book plan');
     expectHighlightMatchesText(ctxFrom(['e4', 'e5', 'Nf3']), 'book plan (black)');
     expectHighlightMatchesText(ctxFrom([]), 'root plan');
+  });
+});
+
+describe('namedSquares', () => {
+  // Black to move: their (White's) bishop on g5, your (Black's) knight on f6.
+  const FEN = '4k3/8/5n2/6B1/8/8/8/4K3 b - - 1 1';
+  it('checks the named piece type and colour, not just that some piece stands there', () => {
+    expect(namedSquares('Look at your knight on f6.', FEN)).toEqual(['f6']);
+    expect(namedSquares('Look at your bishop on f6.', FEN)).toEqual([]);
+    expect(namedSquares('Look at their knight on f6.', FEN)).toEqual([]);
+    expect(namedSquares('Look at their bishop on g5.', FEN)).toEqual(['g5']);
+    expect(namedSquares('Look at your bishop on g5.', FEN)).toEqual([]);
+    expect(namedSquares('Look at the knight on f6.', FEN)).toEqual(['f6']);
+    expect(namedSquares('Look at e4.', FEN)).toEqual([]);
+    expect(namedSquares(null, FEN)).toEqual([]);
   });
 });

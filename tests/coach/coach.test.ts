@@ -755,7 +755,48 @@ describe('spoiler-free mistake card', () => {
   });
 });
 
+describe('mistake card Claude rewrites that point at the better move in prose', () => {
+  it.each([
+    { whatHappened: 'Move your king to e2 instead.' },
+    { whatHappened: 'Your knight on e5 can be taken.', lesson: 'Step your king on e1 up first.' },
+    { whatHappened: 'Ke2 would keep things calm.' },
+  ])('keeps the template for %o', async (out) => {
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(new FakeEngine(knightTable()), { explain: () => Promise.resolve(out) }));
+    coach.onUpdate((m) => updates.push(m));
+    const game = new GameState('w', KNIGHT_FEN);
+    await coach.onUserMove(game, game.play('f3e5'));
+    await flush();
+    expect(updates).toHaveLength(0);
+  });
+});
+
 describe('Coach.showMe and playOnReveal', () => {
+  it('is idempotent per mistake: the same message and a single Claude call', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { coach } = await knightBlunder({ explain });
+    explain.mockClear();
+    const a = coach.showMe();
+    const b = coach.showMe();
+    const c = coach.playOnReveal();
+    await flush();
+    expect(b?.id).toBe(a?.id);
+    expect(c?.id).toBe(a?.id);
+    expect(explain).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the upgraded reveal once Claude has answered', async () => {
+    const explain = vi.fn((p: FactPacket) => Promise.resolve(p.kind === 'mistake' ? null : { whatHappened: 'Ke2 walks your king up.' }));
+    const { coach } = await knightBlunder({ explain });
+    const first = coach.showMe()!;
+    await flush();
+    const again = coach.showMe()!;
+    expect(again.id).toBe(first.id);
+    expect(again.source).toBe('claude');
+    expect(again.explanation.whatHappened).toBe('Ke2 walks your king up.');
+  });
+
+
   const expectReveal = (m: CoachMessage | null) => {
     expect(m?.kind).toBe('post_move');
     expect(m?.summary).toBe('The better move was Ke2.');
@@ -805,29 +846,32 @@ describe('Coach.showMe and playOnReveal', () => {
 
   it('upgrades the reveal from Claude, but drops a stale answer once the user moves again', async () => {
     const d1 = deferred<Explanation | null>();
-    const d2 = deferred<Explanation | null>();
-    let calls = 0;
-    const explain = vi.fn((p: FactPacket) => (p.kind === 'mistake' ? Promise.resolve(null) : [d1, d2][calls++].promise));
+    const explain = vi.fn((p: FactPacket) => (p.kind === 'mistake' || !p.facts.reveal ? Promise.resolve(null) : d1.promise));
     const updates: CoachMessage[] = [];
     const { coach, game } = await knightBlunder({ explain });
     coach.onUpdate((m) => updates.push(m));
     game.takeBackUserMove();
     coach.cancelPending();
 
+    coach.showMe();
+    await coach.onUserMove(game, game.play('e1e2'));
+    expect(coach.showMe()).toBeNull(); // the reveal belonged to the mistake, which is gone
+    d1.resolve({ whatHappened: 'Ke2 is good.' });
+    await flush();
+    expect(updates.filter((m) => m.reveal)).toHaveLength(0);
+  });
+
+  it('emits the Claude upgrade of a current reveal', async () => {
+    const updates: CoachMessage[] = [];
+    const explain = (p: FactPacket) => Promise.resolve(p.kind === 'mistake' ? null : { whatHappened: 'Ke2 walks your king up.' });
+    const { coach } = await knightBlunder({ explain });
+    coach.onUpdate((m) => updates.push(m));
     const shown = coach.showMe()!;
-    d1.resolve({ whatHappened: 'Ke2 walks your king toward the middle.' });
     await flush();
     expect(updates).toHaveLength(1);
     expect(updates[0].id).toBe(shown.id);
     expect(updates[0].source).toBe('claude');
     expect(updates[0].summary).toBe('The better move was Ke2.');
-
-    coach.showMe();
-    await coach.onUserMove(game, game.play('e1e2'));
-    const before = updates.length;
-    d2.resolve({ whatHappened: 'Ke2 is good.' });
-    await flush();
-    expect(updates.slice(before).some((m) => m.reveal)).toBe(false);
   });
 });
 

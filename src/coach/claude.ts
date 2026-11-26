@@ -2,6 +2,7 @@ import { Chess } from 'chess.js';
 import type { Square } from 'chess.js';
 import { z } from 'zod/v4';
 import type { ProfileSummary } from '../types';
+import { positionFacts } from './facts';
 import type { HangingPiece } from './facts';
 import type { Explanation, MistakeContext } from './templates';
 import type { PostMoveContext, RevealContext } from './postMove';
@@ -174,7 +175,9 @@ export function buildPacket(
 export function buildRevealPacket(ctx: RevealContext, t: Explanation, p: ProfileSummary): FactPacket {
   const v = ctx.verdict;
   return {
-    kind: 'post_move', fen: ctx.move.fenBefore, hanging: [], sanHistory: [],
+    // No fenAfter: "hanging" is what the user could have won in the position before their move.
+    kind: 'post_move', fen: ctx.move.fenBefore, sanHistory: [],
+    hanging: positionFacts(ctx.move.fenBefore).hanging.filter((h) => h.color !== ctx.move.color),
     allowedMoves: [v.bestSan],
     facts: { reveal: true, bestMove: v.bestSan, area: v.area },
     template: t, profile: p, bestReasons: forPacket(ctx.bestReasons),
@@ -195,7 +198,7 @@ Explain only the given reasons:
 - The reasons are in the template, and for kind "post_move" also in "reasons" (the played move) and "bestReasons" (the better move). Each was checked with the engine or the rules of chess.
 - Never add a reason of your own. If the template gives one reason, give one reason.
 - For kind "post_move": explain why the played move works (playedMoveIs "top" or "book") or why the stronger move is better than the played one ("not_top").
-- When facts.reveal is true, the user asked to see the better move: explain only why bestMove is good, from "bestReasons".
+- When facts.reveal is true, the user asked to see the better move: explain only why bestMove is good, from "bestReasons". For a reveal there is no "fenAfter": "hanging" lists their pieces that can be won in "fen".
 - For kind "mistake": never name or hint at a better move. The user may take the move back and look for it themselves.
 
 Truth rule (strict):

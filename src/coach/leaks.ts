@@ -22,3 +22,26 @@ export function moveLeaks(text: string, allowedSan: string[] = []): string[] {
   }
   return out;
 }
+
+const MOVE_VERB = /\b(play|plays|played|playing|push|pushes|pushing|move|moves|moved|moving|bring|brings|bringing|put|puts|putting|step|steps|stepping|go|goes|going|walk|walks|walking|jump|jumps|jumping|slide|slides|sliding|retreat|retreats|retreating|advance|advances|advancing|send|sends|sending)\b/i;
+const squareRe = (sq: string) => new RegExp(`\\b${sq}\\b`, 'i');
+
+/**
+ * True when `text` points at one particular move (the better move, `bestSan` / `bestUci`): it names
+ * the move, a piece going to its destination, either of its squares in a sentence with a move verb,
+ * or castling when the move castles. Errs towards flagging. Used on Claude's rewrite of the mistake
+ * card, which must keep the better move hidden while the user decides.
+ */
+export function revealsMove(text: string, bestSan: string, bestUci: string): boolean {
+  const best = strip(bestSan);
+  if (moveTokens(text).some((t) => isAllowedToken(t, new Set([best])))) return true;
+  if (/^O-O/.test(best) && CASTLE.test(text)) return true;
+  const from = bestUci.slice(0, 2);
+  const to = bestUci.slice(2, 4);
+  for (const m of text.matchAll(PIECE_TO_SQUARE)) if (squareRe(to).test(m[0])) return true;
+  if (new RegExp(`\\b(to|onto|into|towards?)\\s+${to}\\b`, 'i').test(text)) return true;
+  for (const sentence of text.match(/[^.?!]+[.?!]?/g) ?? []) {
+    if (MOVE_VERB.test(sentence) && (squareRe(to).test(sentence) || squareRe(from).test(sentence))) return true;
+  }
+  return false;
+}

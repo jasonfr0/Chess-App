@@ -184,14 +184,31 @@ function openingItems(ctx: QuestionContext): Item[] {
   return out;
 }
 
-const SQUARE_RE = /\b[a-h][1-8]\b/g;
+const PIECE_TYPE: Record<string, PieceRef['piece']> = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q', king: 'k' };
+/** "your knight on f6", "their pawn on e5", "the bishop on g5". */
+const PIECE_ON_RE = /\b(?:(your|their|the)\s+)?(pawn|knight|bishop|rook|queen|king)s?\s+on\s+([a-h][1-8])\b/gi;
 
-/** Every square `text` names that has a piece on it in `fen`, in order, once each. */
+/**
+ * Every square `text` names as "<piece> on <square>" where that piece (and side, for "your" /
+ * "their", seen from the side to move in `fen`) really stands, in order, once each. A square named
+ * without a piece is never ringed.
+ */
 export function namedSquares(text: string | null, fen: string): string[] {
   if (!text) return [];
   let board: Chess;
   try { board = new Chess(fen); } catch { return []; }
-  return [...new Set(text.match(SQUARE_RE) ?? [])].filter((sq) => board.get(sq as Square));
+  const me = board.turn();
+  const out: string[] = [];
+  for (const m of text.matchAll(PIECE_ON_RE)) {
+    const owner = m[1]?.toLowerCase();
+    const sq = m[3].toLowerCase();
+    const piece = board.get(sq as Square);
+    if (!piece || piece.type !== PIECE_TYPE[m[2].toLowerCase()]) continue;
+    if (owner === 'your' && piece.color !== me) continue;
+    if (owner === 'their' && piece.color === me) continue;
+    if (!out.includes(sq)) out.push(sq);
+  }
+  return out;
 }
 
 export function preMoveCoaching(ctx: QuestionContext): PreMoveCoaching {

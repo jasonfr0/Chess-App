@@ -396,7 +396,7 @@ describe('buildRevealPacket', () => {
     expect(p.fenAfter).toBeUndefined();
     expect(p.allowedMoves).toEqual(['Ke2']);
     expect(p.sanHistory).toEqual([]);
-    expect(p.hanging).toEqual([]);
+    expect(p.hanging).toEqual([]); // nothing of theirs can be won before Ne5
     expect(p.reasons).toBeUndefined();
     expect(p.bestReasons).toEqual(bestReasons);
     expect(p.facts).toEqual({ reveal: true, bestMove: 'Ke2', area: 'endgame' });
@@ -408,5 +408,27 @@ describe('buildRevealPacket', () => {
   it('a Claude rewrite naming the played move or reply is thrown away', async () => {
     const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Ke2 is better than Ne5.' } });
     expect(await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
+  });
+});
+
+describe('buildRevealPacket hanging pieces', () => {
+  it("lists the opponent's pieces that can be won before the mistake, so a true \"free\" rewrite passes", () => {
+    // White's Nf3 can take the undefended knight on g5; the user played Kd2 instead.
+    const fenBefore = '4k3/8/8/6n1/8/5N2/8/4K3 w - - 0 1';
+    const c = new Chess(fenBefore);
+    c.move('Kd2');
+    const move = { san: 'Kd2', uci: 'e1d2', fenBefore, fenAfter: c.fen(), color: 'w' as const };
+    const verdict = { flagged: true, severity: 'blunder' as const, cpLoss: 300, area: 'endgame' as const,
+      theme: 'other' as const, recommendation: 'take_back' as const, bestUci: 'f3g5', bestSan: 'Nxg5', refutationSan: [] };
+    const bestReasons = deriveReasons(fenBefore, 'f3g5', { book: null, area: 'endgame' });
+    const p = buildRevealPacket({ verdict, move, bestReasons }, { whatHappened: 'Nxg5 takes the knight on g5.' }, profile);
+    expect(p.hanging.map((h) => [h.square, h.color])).toEqual([['g5', 'b']]);
+    expect(validateClaims({ whatHappened: 'Nxg5 takes their knight on g5 for free.' }, p)).toBe(true);
+  });
+
+  it('tells Claude where "hanging" points for a reveal', async () => {
+    const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
+    await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
+    expect(reqs[0].system[0].text).toContain('For a reveal there is no "fenAfter": "hanging" lists their pieces that can be won in "fen".');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moveLeaks } from '../../src/coach/leaks';
+import { moveLeaks, revealsMove } from '../../src/coach/leaks';
 
 describe('moveLeaks', () => {
   it.each([
@@ -33,5 +33,32 @@ describe('moveLeaks', () => {
     expect(moveLeaks('They castled: 0-0.', ['O-O'])).toEqual([]);
     expect(moveLeaks('They played Nf6+.', ['Nf6'])).toEqual([]);
     expect(moveLeaks('They played Nf6.')).toEqual(['Nf6']);
+  });
+});
+
+describe('revealsMove', () => {
+  // The better move: Ke2 (e1e2).
+  it.each([
+    'Ke2 was better.',
+    'Moving your king to e2 was safer.',
+    'Your king to e2 keeps it safe.',
+    'You could step your king on e1 forward.',
+    'Move the king from e1 first.',
+    'Put your king on e2.',
+  ])('flags "%s"', (text) => {
+    expect(revealsMove(text, 'Ke2', 'e1e2')).toBe(true);
+  });
+
+  it.each([
+    'After Ne5, your knight on e5 can be taken for free.',
+    'They can play dxe5.',
+    'Left a piece hanging: after every move, ask what is undefended.',
+    'Your king on e1 is safe for now.',
+  ])('lets "%s" through', (text) => {
+    expect(revealsMove(text, 'Ke2', 'e1e2')).toBe(false);
+  });
+
+  it('flags any castling talk when the better move castles', () => {
+    expect(revealsMove('Getting your king safe by castling was better.', 'O-O', 'e1g1')).toBe(true);
   });
 });

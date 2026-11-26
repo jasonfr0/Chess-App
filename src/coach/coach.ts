@@ -12,6 +12,7 @@ import type { PieceRef } from './facts';
 import { THEME_LESSONS, THEME_WHY, mistakeTemplate } from './templates';
 import type { Explanation, MistakeContext } from './templates';
 import { preMoveCoaching } from './questions';
+import { revealsMove } from './leaks';
 import type { QuestionContext } from './questions';
 import { postMoveTemplate, revealTemplate, topMoveKind } from './postMove';
 import type { PostMoveContext, RevealContext, TopKind } from './postMove';
@@ -26,6 +27,10 @@ export interface HintStep { text: string; highlight: string[] }
 export interface CoachMessage {
   id: string; kind: 'pre_move' | 'post_move' | 'mistake' | 'consequence' | 'recap' | 'level_change';
   explanation: Explanation; arrows: Arrow[]; source: 'template' | 'claude';
+  /**
+   * The judged move. On a 'mistake' message the UI must not render verdict.bestSan / bestUci (or
+   * anything built from them): the better move stays hidden until Show me or Play on.
+   */
   verdict?: Verdict;
   /** pre_move: what their last move did (null on move 1 as White), questions, and an optional hint. None names a move. */
   questions?: string[]; nudge?: string | null; theirMove?: string | null;
@@ -58,6 +63,17 @@ function preMoveFields(ctx: QuestionContext): Pick<CoachMessage, 'questions' | '
   const { theirMove, questions, nudge, nudgeHighlight } = preMoveCoaching(ctx);
   const repeats = nudge !== null && questions.includes(nudge);
   return { theirMove, questions, nudge: repeats ? null : nudge, nudgeHighlight: repeats ? [] : nudgeHighlight };
+}
+
+/** The better move's checked reasons, in the position before the user's move. */
+function bestReasonsFor(
+  move: PlayedMove, userColor: Color, before: PlayedMove[], verdict: Verdict, analysis: Analysis,
+): Reasons {
+  return deriveReasons(move.fenBefore, verdict.bestUci, {
+    book: lookup(userColor, [...before.map((m) => m.san), verdict.bestSan]),
+    area: verdict.area,
+    line: analysis.lines.find((l) => l.uci[0] === verdict.bestUci)?.uci,
+  });
 }
 
 /** A mistake card never carries a better-move field, even from Claude. */
@@ -114,7 +130,11 @@ function lostPiece(move: PlayedMove, refutationUci: string[], since: PlayedMove[
 }
 
 interface CacheEntry { fen: string; analysis: Promise<Analysis>; done?: Analysis }
-interface Mistake { verdict: Verdict; move: PlayedMove; refutationUci: string[]; plyAfter: number; bestReasons: Reasons }
+interface Mistake {
+  verdict: Verdict; move: PlayedMove; refutationUci: string[]; plyAfter: number; bestReasons: Reasons;
+  /** The reveal of the better move, once built; showMe and playOnReveal return it again. */
+  revealed?: { message: CoachMessage };
+}
 interface Tracker { mistake: Mistake; opponentSans: string[]; gain: number; balanceAtMistake: number }
 
 export class Coach {
@@ -220,11 +240,7 @@ export class Coach {
         const reasons = deriveReasons(move.fenBefore, move.uci, {
           book: bookHit, area: verdict.area, line: [move.uci, ...(afterAnalysis.lines[0]?.uci ?? [])],
         });
-        const bestReasons = kind !== null ? null : deriveReasons(move.fenBefore, verdict.bestUci, {
-          book: lookup(game.userColor, [...before.map((m) => m.san), verdict.bestSan]),
-          area: verdict.area,
-          line: beforeAnalysis.lines.find((l) => l.uci[0] === verdict.bestUci)?.uci,
-        });
+        const bestReasons = kind !== null ? null : bestReasonsFor(move, game.userColor, before, verdict, beforeAnalysis);
         return { verdict, message: this.postMove(verdict, move, kind, bookHit, reasons, bestReasons) };
       }
 
@@ -236,15 +252,16 @@ export class Coach {
       const explanation = mistakeTemplate(ctx);
       const arrows: Arrow[] = refutationUci[0] ? [arrow(refutationUci[0], 'red')] : [];
       const message: CoachMessage = { id: this.newId(), kind: 'mistake', explanation, arrows, source: 'template', verdict };
-      const bestReasons = deriveReasons(move.fenBefore, verdict.bestUci, {
-        book: lookup(game.userColor, [...before.map((m) => m.san), verdict.bestSan]),
-        area: verdict.area,
-        line: beforeAnalysis.lines.find((l) => l.uci[0] === verdict.bestUci)?.uci,
-      });
+      const bestReasons = bestReasonsFor(move, game.userColor, before, verdict, beforeAnalysis);
       this.lastMistake = { verdict, move, refutationUci, plyAfter: index + 1, bestReasons };
       this.currentId = message.id;
       this.publish(message, () => buildPacket('mistake', ctx, explanation, this.deps.profile()),
-        () => this.currentId === message.id, undefined, withoutBetter);
+        () => this.currentId === message.id, {
+          // Claude's prose is checked too: no field may point at the better move.
+          accept: (e) => ![e.whatHappened, e.better, e.lesson]
+            .some((t) => t !== undefined && revealsMove(t, verdict.bestSan, verdict.bestUci)),
+          fields: withoutBetter,
+        });
       return { verdict, message };
     } catch {
       return stub;
@@ -264,7 +281,7 @@ export class Coach {
     this.emit(message);
     if (ctx.kind !== 'top') return; // book moves keep the repertoire's own idea text
     this.publish(message, () => buildPacket('post_move', ctx, message.explanation, this.deps.profile()),
-      () => this.post === post, (upgraded) => { post.message = upgraded; });
+      () => this.post === post, { onUpgrade: (upgraded) => { post.message = upgraded; } });
   }
 
   private postMove(
@@ -284,7 +301,7 @@ export class Coach {
     this.post = post;
     if (kind === null) {
       this.publish(message, () => buildPacket('post_move', ctx, explanation, this.deps.profile()),
-        () => this.post === post, (upgraded) => { post.message = upgraded; });
+        () => this.post === post, { onUpgrade: (upgraded) => { post.message = upgraded; } });
     }
     return message;
   }
@@ -336,6 +353,7 @@ export class Coach {
   private reveal(): CoachMessage | null {
     const m = this.lastMistake;
     if (!m) return null;
+    if (m.revealed) return m.revealed.message; // once per mistake: the same message, one Claude call
     const ctx: RevealContext = { verdict: m.verdict, move: m.move, bestReasons: m.bestReasons };
     const { summary, explanation } = revealTemplate(ctx, positionFacts(m.move.fenAfter));
     const message: CoachMessage = {
@@ -343,9 +361,11 @@ export class Coach {
       topKind: null, explained: true, reveal: true, arrows: [arrow(m.verdict.bestUci, 'green')],
     };
     const post = { message, ctx: null };
+    const revealed = { message };
+    m.revealed = revealed;
     this.post = post;
     this.publish(message, () => buildRevealPacket(ctx, explanation, this.deps.profile()),
-      () => this.post === post, (upgraded) => { post.message = upgraded; });
+      () => this.post === post, { onUpgrade: (upgraded) => { post.message = upgraded; revealed.message = upgraded; } });
     return message;
   }
 
@@ -455,13 +475,20 @@ export class Coach {
    */
   private publish(
     message: CoachMessage, packet: () => FactPacket, isCurrent: () => boolean,
-    onUpgrade?: (m: CoachMessage) => void, fields: (e: Explanation) => Explanation = (e) => e,
+    opts: {
+      onUpgrade?: (m: CoachMessage) => void;
+      /** Claude's answer is used only if this holds. */
+      accept?: (e: Explanation) => boolean;
+      /** The fields kept from the merged explanation. */
+      fields?: (e: Explanation) => Explanation;
+    } = {},
   ): void {
+    const { onUpgrade, accept = () => true, fields = (e: Explanation) => e } = opts;
     const epoch = this.epoch;
     Promise.resolve()
       .then(() => this.deps.explain(packet()))
       .then((better) => {
-        if (!better || epoch !== this.epoch || !isCurrent()) return;
+        if (!better || epoch !== this.epoch || !isCurrent() || !accept(better)) return;
         const explanation = fields({ ...message.explanation, ...better });
         const upgraded: CoachMessage = { ...message, explanation, source: 'claude' };
         onUpgrade?.(upgraded);
