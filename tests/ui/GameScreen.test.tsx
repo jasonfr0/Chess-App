@@ -309,8 +309,8 @@ describe('GameScreen', () => {
     await waitFor(() => expect(onGameListChanged).toHaveBeenCalledTimes(2));
   });
 
-  it('a retry after Hint 3 (which names the move) counts as assisted; one after Hint 2 does not', async () => {
-    for (const hintsTaken of [2, 3]) {
+  it('after a take-back, replaying the better move the card showed counts as assisted at any hint count', async () => {
+    for (const hintsTaken of [0, 2, 3]) {
       cleanup();
       const coach = fakeCoach();
       const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
@@ -332,7 +332,26 @@ describe('GameScreen', () => {
       onProfile.mockClear();
       drop('d2', 'd4');
       await waitFor(() => expect(onProfile).toHaveBeenCalled());
-      expect(lastRecord(onProfile)?.assisted).toBe(hintsTaken === 3 ? true : undefined);
+      expect(lastRecord(onProfile)?.assisted).toBe(true);
     }
+  });
+
+  it('after a take-back, a different move found without Hint 3 is not assisted', async () => {
+    const coach = fakeCoach();
+    const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
+      recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] };
+    const mistake: CoachMessage = { id: 'm1', kind: 'mistake', source: 'template', arrows: [], verdict,
+      explanation: { whatHappened: 'Bad.', better: 'The better move was d4.', lesson: 'Look first.' } };
+    const ok = coach.onUserMove;
+    coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
+    const { onProfile } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    fireEvent.click(await screen.findByRole('button', { name: 'Take it back' }));
+    onProfile.mockClear();
+    drop('c2', 'c4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBeUndefined();
   });
 });

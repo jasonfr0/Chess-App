@@ -140,6 +140,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   d.current = deps;
   const profile = useRef(deps.profile);
   const settings = useRef(deps.settings);
+  /** The better move the mistake card showed before a take-back (uci from+to), until the retry is played. */
+  const retryBest = useRef<string | null>(null);
   const seen = useRef({ profile: deps.profile, settings: deps.settings });
   if (deps.profile !== seen.current.profile) { seen.current.profile = deps.profile; profile.current = deps.profile; }
   if (deps.settings !== seen.current.settings) { seen.current.settings = deps.settings; settings.current = deps.settings; }
@@ -355,7 +357,12 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const visible = msg !== null &&
         (levelAt(game, profile.current, settings.current) === 'full' || v.choicesShownFor === msg.id);
       // Hint 3 names the move outright, so whatever is played after it is not found on one's own.
-      const assisted = shownMoves(msg, visible).includes(uci.slice(0, 4)) || (v.hints?.length ?? 0) >= 3;
+      // After a take-back the mistake card has already shown the better move (text and arrow),
+      // so replaying exactly that move is not found on one's own either.
+      const replaysShownBest = v.hints !== null && retryBest.current === uci.slice(0, 4);
+      const assisted = shownMoves(msg, visible).includes(uci.slice(0, 4)) ||
+        (v.hints?.length ?? 0) >= 3 || replaysShownBest;
+      retryBest.current = null;
       let move;
       try { move = game.play(uci); } catch { return false; }
       set({ phase: 'checking', coachMsg: null, consequence: null, hints: null, choicesShownFor: null });
@@ -377,6 +384,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const game = view.current.game;
       if (!game || view.current.phase !== 'mistake') return;
       stopWork();
+      retryBest.current = view.current.mistake?.verdict?.bestUci.slice(0, 4) ?? null;
       game.takeBackUserMove();
       save();
       set({ phase: 'user', mistake: null, hints: [] });
