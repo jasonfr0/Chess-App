@@ -232,7 +232,8 @@ export function preMoveCoaching(ctx: QuestionContext): PreMoveCoaching {
     const it = make(ctx);
     if (it) items.push(it);
   }
-  items.push(...openingItems(ctx));
+  // In check, getting out of it is the whole decision: no opening plan, development or plan nudge.
+  if (!ctx.facts.inCheck) items.push(...openingItems(ctx));
 
   const chosen = items.filter((i) => safe(i.question)).slice(0, MAX_QUESTIONS);
   const habits = HABIT_QUESTIONS.filter((q) => ctx.lastMove || q !== HABIT_QUESTIONS[0]);

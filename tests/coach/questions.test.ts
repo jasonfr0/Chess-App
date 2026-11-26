@@ -14,6 +14,7 @@ const MATE_Q = "There's a way to win right now. Look at every check you can give
 const WIN_Q = 'Is there anything of theirs you can win?';
 const FORK_Q = 'Can one of your pieces attack two things at once?';
 const UNDEVELOPED_Q = "Which pieces haven't moved yet?";
+const KING_SAFETY_Q = 'Is your king safe yet?';
 
 function history(sans: string[], start = START): PlayedMove[] {
   const c = new Chess(start);
@@ -160,6 +161,18 @@ describe('preMoveCoaching questions', () => {
     const r = preMoveCoaching(ctxFrom(['Ke8'], { start: '3k4/8/8/8/8/8/4P3/4K3 b - - 0 30' }));
     expect(r.questions).toEqual([...HABIT_QUESTIONS]);
     expect(r.nudge).toBeNull();
+  });
+
+  it('in check, skips opening plan and development questions and the plan nudge', () => {
+    const book = lookup('w', ['e4', 'e5'])!;
+    const ctx = ctxFrom(['e4', 'e5', 'f3', 'Qh4+'], { book });
+    expect(ctx.facts.inCheck).toBe(true);
+    const r = preMoveCoaching(ctx);
+    expect(r.questions[0]).toBe(CHECK_Q);
+    expect(r.questions).not.toContain(book.node.plan);
+    expect(r.questions).not.toContain(UNDEVELOPED_Q);
+    expect(r.questions).not.toContain(KING_SAFETY_Q);
+    expect(r.nudge).not.toBe(book.node.plan);
   });
 
   it('on move 1 as White has no opponent move and leads with the root plan', () => {
