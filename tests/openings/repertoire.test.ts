@@ -160,6 +160,11 @@ describe('repertoire ideas pass the claim checks Claude is held to', () => {
     expect(hit?.node.idea).toContain('without blocking your c-pawn');
   });
 
+  it('after the exchange dxc6 says what the move does, not a queen fork to look for next', () => {
+    const hit = lookup('b', ['e4', 'e5', 'Nf3', 'Nc6', 'Bb5', 'a6', 'Bxc6', 'dxc6']);
+    expect(hit?.node.idea).toBe('Your queen and your bishop on c8 now have open lines.');
+  });
+
   it('after 3...d6 says the f8 bishop can only go to e7', () => {
     expect(lookup('w', ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'd6'])?.node.idea)
       .toContain('hems in the bishop on f8, which can now only go to e7');

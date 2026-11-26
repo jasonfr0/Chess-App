@@ -280,7 +280,7 @@
                               "children": [
                                 {
                                   "san": "dxc6",
-                                  "idea": "Your queen and your bishop on c8 now have open lines. If White's knight grabs your pawn on e5, look for a queen attack on two things at once.",
+                                  "idea": "Your queen and your bishop on c8 now have open lines.",
                                   "children": [],
                                   "main": true
                                 }
