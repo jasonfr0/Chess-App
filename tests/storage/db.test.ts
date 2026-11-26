@@ -158,4 +158,24 @@ describe('db', () => {
     expect((await db.getSettings()).opponentRating).toBe(777);
     expect((await db.getProfile()).themes.missed_pin.count).toBe(4);
   });
+
+  it('defaults attackLines off and imports backups without the new fields', async () => {
+    expect(DEFAULT_SETTINGS.attackLines).toBe(false);
+    const db = await openDb(fresh());
+    const oldSettings = { model: 'claude-sonnet-5-5', levelOverride: {}, clockMinutes: null, opponentRating: 600 };
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, settings: oldSettings, games: [game('a')] }));
+    expect((await db.getSettings()).attackLines).toBe(false);
+    expect((await db.getGame('a'))?.userMoves).toBeUndefined();
+  });
+
+  it('round-trips attackLines, attackLinesMoves and userMoves through export/import', async () => {
+    const a = await openDb(fresh());
+    await a.saveSettings({ ...DEFAULT_SETTINGS, attackLines: true });
+    await a.saveGame({ ...game('a'), attackLinesMoves: 7, userMoves: 9 });
+    const b = await openDb(fresh());
+    await b.importAll(await a.exportAll());
+    expect((await b.getSettings()).attackLines).toBe(true);
+    const g = await b.getGame('a');
+    expect([g?.attackLinesMoves, g?.userMoves]).toEqual([7, 9]);
+  });
 });

@@ -10,14 +10,17 @@ export interface Settings {
   levelOverride: Partial<Record<Area, CoachLevel>>;
   clockMinutes: number | null;
   opponentRating: number;
+  attackLines: boolean;
 }
 export const DEFAULT_SETTINGS: Settings = {
-  apiKey: '', model: 'claude-sonnet-5-5', levelOverride: {}, clockMinutes: null, opponentRating: 600,
+  apiKey: '', model: 'claude-sonnet-5-5', levelOverride: {}, clockMinutes: null, opponentRating: 600, attackLines: false,
 };
 
 export interface SavedGame {
   id: string; startedAt: number; userColor: Color; moves: string[];
   verdicts: Verdict[]; result: GameResult | null;
+  /** user moves made with attack lines on / all user moves; absent in older games (= lines off) */
+  attackLinesMoves?: number; userMoves?: number;
 }
 
 export interface Db {
@@ -62,6 +65,7 @@ const settingsSchema = z.object({
   levelOverride: z.partialRecord(areaEnum, levelEnum),
   clockMinutes: z.number().nullable(),
   opponentRating: z.number(),
+  attackLines: z.boolean().optional(), // newer field; older backups lack it
 });
 const gameSchema = z.object({
   id: z.string(),
@@ -69,6 +73,8 @@ const gameSchema = z.object({
   userColor: z.enum(['w', 'b']),
   moves: z.array(z.string()),
   verdicts: z.array(z.looseObject({})),
+  attackLinesMoves: z.number().optional(),
+  userMoves: z.number().optional(),
   result: z.object({
     winner: z.enum(['w', 'b']).nullable(),
     reason: z.enum(['checkmate', 'stalemate', 'repetition', 'fifty_move', 'insufficient', 'resign', 'timeout']),
