@@ -1,10 +1,23 @@
 import type { Color } from '../types';
 import data from './repertoire.json';
 
-export interface RepertoireNode { san: string; name?: string; idea: string; children: RepertoireNode[]; main?: boolean }
+/**
+ * `idea` is shown after the move is played: for the user's moves, why it is good; for the
+ * opponent's, only what their move does. `plan` (opponent moves only) is shown before the user's
+ * reply: a goal to aim for that names no move and no destination square.
+ */
+export interface RepertoireNode { san: string; name?: string; idea: string; plan?: string; children: RepertoireNode[]; main?: boolean }
 export interface BookHit { node: RepertoireNode; lineName: string; inBook: true }
 
 const roots: Record<Color, RepertoireNode[]> = { w: data.white, b: data.black };
+
+/**
+ * The opening plan before the user's first move: the root plan for White, and for Black the plan
+ * after the opponent's first book move.
+ */
+export function rootPlan(color: Color): string {
+  return color === 'w' ? data.whitePlan : (roots.b[0].plan ?? '');
+}
 
 /** Follows sanHistory down the tree; returns the visited nodes, or null if a move leaves the book. */
 function walk(userColor: Color, sanHistory: string[]): RepertoireNode[] | null {

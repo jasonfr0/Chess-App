@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
 import data from '../../src/openings/repertoire.json';
-import { lookup, bookReplies, type RepertoireNode } from '../../src/openings/repertoire';
+import { lookup, bookReplies, rootPlan, type RepertoireNode } from '../../src/openings/repertoire';
+import { moveLeaks } from '../../src/coach/leaks';
 import type { Color } from '../../src/types';
 import { validateClaims } from '../../src/coach/claude';
 
@@ -87,6 +88,53 @@ describe('repertoire tree', () => {
   });
 });
 
+/** True when the node's move is the opponent's (the user plays `color`). */
+const isOpponent = (color: Color, path: string[]) => (path.length % 2 === 1 ? 'w' : 'b') !== color;
+
+describe('repertoire before-move texts give no move away', () => {
+  for (const color of ['w', 'b'] as const) {
+    it(`has a short plan on every ${color} opponent-move node`, () => {
+      let count = 0;
+      walk(trees[color], [], (node, path) => {
+        if (!isOpponent(color, path)) return;
+        count++;
+        expect(node.plan?.trim().length ?? 0, path.join(' ')).toBeGreaterThan(0);
+        expect(node.plan!.length, path.join(' ')).toBeLessThanOrEqual(220);
+      });
+      expect(count).toBeGreaterThan(10);
+    });
+
+    it(`names no move in any ${color} plan or opponent idea`, () => {
+      const bad: string[] = [];
+      walk(trees[color], [], (node, path) => {
+        if (!isOpponent(color, path)) return;
+        for (const leak of moveLeaks(node.plan ?? '')) bad.push(`${path.join(' ')} plan: ${leak}`);
+        for (const leak of moveLeaks(node.idea, [node.san])) bad.push(`${path.join(' ')} idea: ${leak}`);
+      });
+      expect(bad).toEqual([]);
+    });
+
+    it(`names no move but its own in any ${color} user-move idea (shown before the next decision)`, () => {
+      const bad: string[] = [];
+      walk(trees[color], [], (node, path) => {
+        if (isOpponent(color, path)) return;
+        for (const leak of moveLeaks(node.idea, [node.san])) bad.push(`${path.join(' ')} idea: ${leak}`);
+      });
+      expect(bad).toEqual([]);
+    });
+  }
+
+  it('has a move-free plan for move 1 as White', () => {
+    expect(rootPlan('w').trim().length).toBeGreaterThan(0);
+    expect(rootPlan('w').length).toBeLessThanOrEqual(220);
+    expect(moveLeaks(rootPlan('w'))).toEqual([]);
+  });
+
+  it("uses the opponent's first move plan for Black", () => {
+    expect(rootPlan('b')).toBe(data.black[0].plan);
+  });
+});
+
 describe('repertoire ideas pass the claim checks Claude is held to', () => {
   it('every "<piece> on <square>" and "free"/"hanging" claim is true in its position', () => {
     const bad: string[] = [];
@@ -97,14 +145,16 @@ describe('repertoire ideas pass the claim checks Claude is held to', () => {
         const fen = c.fen();
         c.move(node.san);
         if (!validateClaims({ whatHappened: node.idea }, { fen, fenAfter: c.fen(), hanging: [] })) bad.push(`${path.join(' ')}: ${node.idea}`);
+        // A plan is read in the position after the opponent's move.
+        if (node.plan && !validateClaims({ whatHappened: node.plan }, { fen: c.fen(), hanging: [] })) bad.push(`${path.join(' ')} plan: ${node.plan}`);
       });
     }
     expect(bad).toEqual([]);
   });
 
-  it('teaches c3 before the b1 knight goes to d2 (Nc3 would block the pawn)', () => {
+  it('warns not to block the c-pawn with the last knight (Nc3 would stop c3), without naming a move', () => {
     const hit = lookup('w', ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Nf6', 'd3', 'Be7', 'O-O']);
-    expect(hit?.node.idea).toContain('push c3, then bring your b1 knight to d2');
+    expect(hit?.node.idea).toContain('without blocking your c-pawn');
   });
 
   it('after 3...d6 says the f8 bishop can only go to e7', () => {
