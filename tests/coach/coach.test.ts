@@ -688,15 +688,15 @@ describe('Coach post_move', () => {
   });
 });
 
-describe('Coach.hint', () => {
-  it('climbs a ladder: theme habit, then piece square; the compatibility hint(3) names the best move', async () => {
+describe('Coach hint ladder after a take-back', () => {
+  it('climbs: theme habit, then piece square; Show me names the best move', async () => {
     const { coach, game } = await knightBlunder();
     game.takeBackUserMove();
     coach.cancelPending();
-    expect(coach.hint(1)).toContain(THEME_LESSONS.hanging_piece.habit);
-    expect(coach.hint(2)).toContain('e1');
-    expect(coach.hint(2)).not.toContain('Ke2');
-    expect(coach.hint(3)).toBe('The better move was Ke2.');
+    expect(coach.hintStep(1).text).toContain(THEME_LESSONS.hanging_piece.habit);
+    expect(coach.hintStep(2).text).toContain('e1');
+    expect(coach.hintStep(2).text).not.toContain('Ke2');
+    expect(coach.showMe()?.summary).toBe('The better move was Ke2.');
   });
 });
 

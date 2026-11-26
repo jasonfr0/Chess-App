@@ -1,16 +1,19 @@
 import { useId } from 'react';
 import type { CoachMessage } from '../coach/coach';
 
-const SEVERITY: Record<string, string> = { inaccuracy: 'Inaccuracy', mistake: 'Mistake', blunder: 'Blunder' };
-
 interface Props {
   message: CoachMessage;
   onTakeBack: () => void;
   onPlayOn: () => void;
+  /** "▶ Watch what happens": offered only when the message carries a line to watch. */
+  onWatch?: () => void;
 }
 
-/** Shown when the user's move is flagged; the game is paused until they choose. */
-export function MistakeCard({ message, onTakeBack, onPlayOn }: Props) {
+/**
+ * Shown when the user's move is flagged; the game is paused until they choose. It never names the
+ * better move: that waits for Show me (after a take-back) or the reveal after Play on.
+ */
+export function MistakeCard({ message, onTakeBack, onPlayOn, onWatch }: Props) {
   const recId = useId();
   const headingId = useId();
   const { explanation, verdict } = message;
@@ -18,15 +21,9 @@ export function MistakeCard({ message, onTakeBack, onPlayOn }: Props) {
 
   return (
     <section className="card mistake" role="alertdialog" aria-labelledby={headingId}>
-      <h2 id={headingId}>{(verdict && SEVERITY[verdict.severity]) ?? 'Mistake'}: let's look at that move</h2>
-      {explanation.better && (
-        <div className="section">
-          <h3>Better move</h3>
-          <p>{explanation.better}</p>
-        </div>
-      )}
+      <h2 id={headingId}>{verdict?.severity === 'blunder' ? '✗ Blunder' : '✗ Mistake'}</h2>
       <div className="section">
-        <h3>What it costs</h3>
+        <h3>What happened</h3>
         <p>{explanation.whatHappened}</p>
       </div>
       {explanation.lesson && (
@@ -34,6 +31,9 @@ export function MistakeCard({ message, onTakeBack, onPlayOn }: Props) {
           <h3>The lesson</h3>
           <p>{explanation.lesson}</p>
         </div>
+      )}
+      {message.watch && message.watch.length > 0 && onWatch && (
+        <button type="button" className="watch-button" onClick={onWatch}>▶ Watch what happens</button>
       )}
       <p id={recId} className="badge">
         Coach recommends: {recommendTakeBack ? 'Take it back and try again' : 'Play on and handle the position'}

@@ -37,7 +37,7 @@ interface Opts {
 function renderPanel(o: Opts = {}) {
   const handlers = {
     onShowQuestions: vi.fn(), onNudge: vi.fn(), onExplain: vi.fn(), onAck: vi.fn(), onToggleLastMove: vi.fn(),
-    onHint: vi.fn(),
+    onHint: vi.fn(), onShowMe: vi.fn(),
   };
   render(
     <CoachPanel
@@ -50,6 +50,7 @@ function renderPanel(o: Opts = {}) {
       nudgeShown={o.nudgeShown ?? false}
       offline={o.offline ?? false}
       hints={null}
+      shownMe={false}
       {...handlers}
     />,
   );

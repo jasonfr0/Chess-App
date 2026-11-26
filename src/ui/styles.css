@@ -131,8 +131,25 @@ label { font-weight: 600; display: block; }
 .level-note { font-weight: 600; }
 .clock-suggestion button { margin-top: 6px; }
 
-.moves { font-size: 14px; color: var(--muted); margin: 6px 0; overflow-wrap: anywhere; }
+.moves { font-size: 14px; color: var(--muted); margin: 6px 0; overflow-wrap: anywhere; line-height: 2; }
 .moves .num { color: var(--text); font-weight: 600; margin-right: 2px; }
+.moves button.move {
+  display: inline; min-height: 0; padding: 2px 4px; border: none; border-radius: 4px; background: transparent;
+  color: inherit; font-size: 14px;
+}
+.moves button.move[aria-current] { background: var(--accent); color: var(--accent-text); }
+.moves button.move:disabled { opacity: 1; }
+
+.history-bar {
+  width: min(calc(100vw - 16px), 60vh); max-width: 100%; margin: 6px auto 0;
+  display: flex; justify-content: center; gap: 8px;
+}
+.history-bar button, .step-buttons button { min-width: 64px; font-size: 18px; }
+.step-buttons { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+.viewing { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.viewing-label { font-weight: 700; }
+.watch { border: 2px solid var(--accent); }
+.mistake .watch-button { width: 100%; margin-top: 10px; }
 
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 10;

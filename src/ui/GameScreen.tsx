@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Chessboard, type Arrow as BoardArrow } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import type { Arrow, CoachMessage } from '../coach/coach';
@@ -6,6 +6,8 @@ import { attackMap } from '../coach/attacks';
 import { SUGGEST_LINES_OFF } from '../profile/attackLines';
 import type { Color } from '../types';
 import { CoachPanel } from './CoachPanel';
+import { HistoryBar, ViewingCard } from './HistoryBar';
+import { WatchPlayer } from './WatchPlayer';
 import { MistakeCard } from './MistakeCard';
 import { PromotionPicker } from './PromotionPicker';
 import { RecapCard } from './RecapCard';
@@ -79,15 +81,17 @@ function formatClock(ms: number): string {
 
 /**
  * The mistake card's arrows while it is open. Otherwise the blue arrow for their last move, plus the
- * green "stronger option" arrow while "Your last move" is expanded and the board still shows the
- * position right after the user's move: once it is the user's turn again no arrow may suggest a move.
+ * green "stronger option" (or Play on reveal) arrow while "Your last move" is expanded and the board
+ * still shows the position right after the user's move: once it is the user's turn again no arrow may
+ * suggest a move. The one exception is Show me, whose move then counts as helped (`shownMe`).
  */
 function coachArrows(
-  mistake: CoachMessage | null, now: CoachMessage | null, lastMove: CoachMessage | null, showBetter: boolean,
+  mistake: CoachMessage | null, now: CoachMessage | null, lastMove: CoachMessage | null, showBetter: boolean, shownMe: boolean,
 ): Arrow[] {
   if (mistake) return mistake.arrows;
   const blue = now?.arrows.filter((a) => a.color === 'blue') ?? [];
-  const green = showBetter && lastMove?.topKind === null ? lastMove.arrows.filter((a) => a.color === 'green') : [];
+  const named = (showBetter && lastMove?.topKind === null) || (shownMe && !!lastMove?.reveal);
+  const green = named ? lastMove!.arrows.filter((a) => a.color === 'green') : [];
   return [...blue, ...green];
 }
 
@@ -97,10 +101,15 @@ const toBoard = (arrows: Arrow[]): BoardArrow[] =>
 export function GameScreen({ coachOffline, ...deps }: Props) {
   const [view, actions] = useGame(deps);
   const [selected, setSelected] = useState<string | null>(null);
-  const { game, phase } = view;
+  const { game, phase, watching, viewPly } = view;
   const fen = game?.fen();
   const history = game?.history() ?? [];
-  const canMove = phase === 'user' && !!game?.isUserTurn() && !view.promotion;
+  const viewing = viewPly !== null && viewPly < history.length;
+  const watchPly = watching ? watching.plies[watching.index] : null;
+  // The position on the board: the watch player's ply, a past ply, or the live game.
+  const boardFen = watchPly?.fen ?? (viewing ? history[viewPly].fenAfter : fen);
+  const live = !viewing && !watchPly;
+  const canMove = live && phase === 'user' && !!game?.isUserTurn() && !view.promotion;
 
   const level = useMemo(
     () => (game ? levelAt(game, deps.profile, deps.settings) : deps.profile.levels.opening),
@@ -109,20 +118,28 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
 
   const message = view.coachMsg;
   const showBetter = view.lastMoveOpen && !!game && !game.isUserTurn() && phase !== 'over';
-  const shownArrows = coachArrows(view.mistake, message, view.lastMove, showBetter);
+  const shownMe = view.lastMoveOpen && !!fen && view.showMeFor === fen;
+  // History view and the watch player show nothing from the live position; the watch player shows its ply's move.
+  const shownArrows: Arrow[] = watchPly
+    ? [{ from: watchPly.uci.slice(0, 2), to: watchPly.uci.slice(2, 4), color: watchPly.by === 'opponent' ? 'red' : 'blue' }]
+    : viewing ? [] : coachArrows(view.mistake, message, view.lastMove, showBetter, shownMe);
 
   // Rings: the revealed nudge's squares (its position only) and the latest revealed hint's.
   const nudgeRings = fen && view.nudgeFor === fen && message?.nudge ? message.nudgeHighlight ?? [] : [];
+  const isUserTurn = phase === 'user' && !!game?.isUserTurn();
   const deco = boardDecorations({
-    fen: fen ?? START_FEN, userColor: game?.userColor ?? 'w', isUserTurn: phase === 'user' && !!game?.isUserTurn(),
-    viewing: false, watching: false, // history view and the watch player arrive later
+    fen: boardFen ?? START_FEN, userColor: game?.userColor ?? 'w', isUserTurn,
+    viewing, watching: !!watchPly,
     attackLines: deps.settings.attackLines, rings: [...nudgeRings, ...view.hintHighlight],
   });
+  // Attack lines on the board during this decision: a move from this position counts as made with them.
+  const linesDisplayed = live && isUserTurn && deps.settings.attackLines && !!fen;
+  useEffect(() => { if (linesDisplayed && fen) actions.linesShown(fen); }, [linesDisplayed, fen]);
   const arrows = [...toBoard(shownArrows), ...deco.arrows];
   const arrowNames = [...shownArrows.map((a) => a.color), ...deco.arrows.map(() => 'red')];
 
   const squareStyles: Record<string, CSSProperties> = {};
-  const last = history.at(-1);
+  const last = watchPly ?? (viewing ? history[viewPly] : history.at(-1));
   if (last) {
     squareStyles[last.uci.slice(0, 2)] = LAST_MOVE;
     squareStyles[last.uci.slice(2, 4)] = LAST_MOVE;
@@ -165,13 +182,13 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   return (
     <div className="game">
       {clockRow(opponentColor, 'Opponent')}
-      <div className="board" data-fen={fen ?? ''} data-arrows={arrowNames.join(',')}
+      <div className="board" data-fen={boardFen ?? ''} data-arrows={arrowNames.join(',')}
         data-squares={deco.marks.join(' ')}
       >
         <Chessboard
           options={{
             id: 'game',
-            position: fen ?? START_FEN,
+            position: boardFen ?? START_FEN,
             boardOrientation: userColor === 'w' ? 'white' : 'black',
             allowDragging: canMove,
             allowDrawingArrows: false,
@@ -185,6 +202,9 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
         />
       </div>
       {clockRow(userColor, 'You')}
+      {game && history.length > 1 && !watching && (
+        <HistoryBar plies={history.length} viewPly={viewing ? viewPly : null} onStep={actions.stepView} />
+      )}
 
       <p className="status" role="status">{STATUS[phase]}</p>
 
@@ -225,9 +245,19 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
         </p>
       )}
 
-      {view.mistake && <MistakeCard message={view.mistake} onTakeBack={actions.takeBack} onPlayOn={actions.playOn} />}
+      {viewing && (
+        <ViewingCard viewPly={viewPly} newMove={view.newMoveWhileViewing} onBack={() => actions.viewPly(null)} />
+      )}
 
-      {game && phase !== 'over' && phase !== 'setup' && !view.mistake && (
+      {watching && (
+        <WatchPlayer plies={watching.plies} index={watching.index} onStep={actions.stepWatch} onClose={actions.closeWatch} />
+      )}
+
+      {view.mistake && !viewing && !watching && (
+        <MistakeCard message={view.mistake} onTakeBack={actions.takeBack} onPlayOn={actions.playOn} onWatch={actions.watch} />
+      )}
+
+      {game && phase !== 'over' && phase !== 'setup' && !view.mistake && !viewing && (
         <CoachPanel
           message={message}
           lastMove={view.lastMove}
@@ -243,7 +273,9 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
           onNudge={actions.nudge}
           offline={coachOffline}
           hints={view.hints}
-          onHint={actions.nextHint}
+          onHint={actions.hint}
+          onShowMe={actions.showMe}
+          shownMe={view.reveal !== null}
           onAskCoach={canMove ? actions.askCoach : undefined}
         />
       )}
@@ -251,7 +283,15 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
       {game && history.length > 0 && (
         <p className="moves" aria-label="Moves">
           {history.map((m, i) => (
-            <span key={i}>{i % 2 === 0 && <span className="num">{Math.floor(i / 2) + 1}.</span>}{m.san} </span>
+            <span key={i}>
+              {i % 2 === 0 && <span className="num">{Math.floor(i / 2) + 1}.</span>}
+              <button
+                type="button" className="move" aria-current={viewing && viewPly === i ? 'step' : undefined}
+                disabled={!!watching} onClick={() => actions.viewPly(i)}
+              >
+                {m.san}
+              </button>{' '}
+            </span>
           ))}
         </p>
       )}

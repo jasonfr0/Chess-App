@@ -15,20 +15,37 @@ const message = (recommendation: Verdict['recommendation']): CoachMessage => ({
   id: 'coach-1', kind: 'mistake', source: 'template', arrows: [], verdict: verdict(recommendation),
   explanation: {
     whatHappened: 'After Ba6, your bishop on a6 can be taken for free.',
-    better: 'The better move was d4.',
     lesson: 'Left a piece hanging: ask what is undefended.',
   },
 });
+const watch = [{ uci: 'b7a6', san: 'bxa6', fen: '8/8/8/8/8/8/8/K6k w - - 0 1', by: 'opponent' as const }];
 
 describe('MistakeCard', () => {
-  it('shows the three sections with their text', () => {
+  it('shows the title, what happened and the lesson, and no better move', () => {
     render(<MistakeCard message={message('take_back')} onTakeBack={() => {}} onPlayOn={() => {}} />);
-    expect(screen.getByText('Better move')).toBeInTheDocument();
-    expect(screen.getByText('What it costs')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(/^✗ Blunder$/);
+    expect(screen.getByText('What happened')).toBeInTheDocument();
     expect(screen.getByText('The lesson')).toBeInTheDocument();
-    expect(screen.getByText('The better move was d4.')).toBeInTheDocument();
     expect(screen.getByText(/can be taken for free/)).toBeInTheDocument();
     expect(screen.getByText(/ask what is undefended/)).toBeInTheDocument();
+    expect(screen.queryByText(/better move/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\bd4\b/)).not.toBeInTheDocument();
+  });
+
+  it('titles a mistake "✗ Mistake"', () => {
+    const m = message('play_on');
+    render(<MistakeCard message={{ ...m, verdict: { ...m.verdict!, severity: 'mistake' } }} onTakeBack={() => {}} onPlayOn={() => {}} />);
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(/^✗ Mistake$/);
+  });
+
+  it('offers "▶ Watch what happens" only when the message has a line to watch', () => {
+    const onWatch = vi.fn();
+    render(<MistakeCard message={message('take_back')} onTakeBack={() => {}} onPlayOn={() => {}} onWatch={onWatch} />);
+    expect(screen.queryByRole('button', { name: '▶ Watch what happens' })).not.toBeInTheDocument();
+    cleanup();
+    render(<MistakeCard message={{ ...message('take_back'), watch }} onTakeBack={() => {}} onPlayOn={() => {}} onWatch={onWatch} />);
+    fireEvent.click(screen.getByRole('button', { name: '▶ Watch what happens' }));
+    expect(onWatch).toHaveBeenCalledTimes(1);
   });
 
   it('calls onTakeBack and onPlayOn', () => {

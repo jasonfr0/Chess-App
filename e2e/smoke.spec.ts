@@ -53,6 +53,17 @@ test('plays a coached game, resumes after reload, fits a 360px screen', async ({
   expect(moves.trim()).toMatch(/^1\.\s*e4 \S+$/); // our move and the opponent's reply
   const fen = await boardFen(page);
 
+  // History: step back to move 1 (read-only, nothing from the live position), then back to the game.
+  await page.getByRole('button', { name: 'Previous move' }).click();
+  await expect(page.getByText('Viewing move 1')).toBeVisible();
+  await expect.poll(() => boardFen(page)).toContain(' b ');
+  expect(await boardArrows(page)).toBe('');
+  await expect(page.locator('.coach')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Back to game' }).click();
+  await expect.poll(() => boardFen(page)).toBe(fen);
+  await expect(page.locator('.coach')).toContainText('Think about');
+  await expectNoMoveGiven(page);
+
   await page.reload();
   await expect(page.getByLabel('Moves')).toHaveText(moves);
   expect(await boardFen(page)).toBe(fen);
@@ -69,9 +80,11 @@ test('stops on a hanging move and takes it back', async ({ page }) => {
   await tapMove(page, 'f1', 'a6');
   const card = page.getByRole('alertdialog');
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await expect(card).not.toContainText('Better move'); // the better move stays hidden while the user decides
-  await expect(card).toContainText('What it costs');
+  await expect(card).toContainText('✗ Blunder');
+  await expect(card).not.toContainText(/better move/i); // the better move stays hidden while the user decides
+  await expect(card).toContainText('What happened');
   await expect(card).toContainText('The lesson');
+  expect(await boardArrows(page)).toBe('red');
 
   await card.getByRole('button', { name: 'Take it back' }).click();
   await expect(card).toBeHidden();
@@ -79,6 +92,11 @@ test('stops on a hanging move and takes it back', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Hint 1' })).toBeEnabled();
   await page.getByRole('button', { name: 'Hint 1' }).click();
   await expect(page.locator('.hints li')).toHaveCount(1);
+  await expect(page.locator('.coach')).not.toContainText('The better move was');
+  expect(await boardArrows(page)).not.toContain('green');
+  await page.getByRole('button', { name: 'Show me' }).click();
+  await expect(page.locator('.coach .last-move')).toContainText(/The better move was \S+\./);
+  expect(await boardArrows(page)).toContain('green');
 
   // The retry is judged by the same (still running) engine and the opponent replies.
   // Wait for the take-back animation to put the bishop home before tapping it.

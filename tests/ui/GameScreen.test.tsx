@@ -1,8 +1,10 @@
 import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act, waitFor, within } from '@testing-library/react';
 import type { ChessboardOptions } from 'react-chessboard';
+import { Chess } from 'chess.js';
+import type { WatchPly } from '../../src/coach/watch';
 import { GameScreen, boardDecorations } from '../../src/ui/GameScreen';
 import { SUGGEST_LINES_OFF } from '../../src/profile/attackLines';
 import { App } from '../../src/ui/App';
@@ -45,17 +47,23 @@ const drop = (from: string, to: string): boolean => {
 
 class FakeEngine implements Engine {
   calls: { fen: string; depth: number }[] = [];
-  /** Searches never answer while held. */
+  /** Searches never answer while held (until release()). */
   hold = false;
   stops = 0;
-  private held = 0;
+  /** The opponent's only candidate move by FEN (its depth-10 search answers with just this line). */
+  replies = new Map<string, string>();
+  private held: (() => void)[] = [];
   analyse(fen: string, opts: { multipv: number; depth: number }): Promise<Analysis> {
     this.calls.push({ fen, depth: opts.depth });
-    if (this.hold) { this.held++; return new Promise(() => {}); }
-    return Promise.resolve({ fen, depth: opts.depth, lines: [] });
+    const reply = opts.depth === 10 ? this.replies.get(fen) : undefined;
+    const answer = (): Analysis => ({ fen, depth: opts.depth, lines: reply ? [{ uci: [reply], cp: 0, mate: null }] : [] });
+    if (this.hold) return new Promise((resolve) => { this.held.push(() => resolve(answer())); });
+    return Promise.resolve(answer());
   }
-  stop(): void { this.stops++; this.held = 0; }
-  busy(): boolean { return this.held > 0; }
+  /** Answers the held searches and stops holding. */
+  release(): void { this.hold = false; const held = this.held; this.held = []; for (const r of held) r(); }
+  stop(): void { this.stops++; this.held = []; }
+  busy(): boolean { return this.held.length > 0; }
 }
 
 const okVerdict = (uci: string, san: string): Verdict => ({
@@ -75,8 +83,9 @@ function fakeCoach(): CoachApi & { recap: ReturnType<typeof vi.fn> } {
     preMove: vi.fn(async () => null),
     onUserMove: vi.fn(async (_g, move) => ({ verdict: ok(move.uci, move.san), message: null })),
     explainTopMove: vi.fn(async () => {}),
-    hint: vi.fn(() => ''),
     hintStep: vi.fn(() => ({ text: '', highlight: [] as string[] })),
+    showMe: vi.fn(() => null),
+    playOnReveal: vi.fn(() => null),
     playOn: vi.fn(),
     checkConsequence: vi.fn(() => null),
     recap: vi.fn(() => recapMessage),
@@ -95,14 +104,15 @@ async function setup(startFen?: string, o: SetupOpts = {}) {
   const coach = o.coach ?? fakeCoach();
   const onProfile = vi.fn((_p: ProfileData) => {});
   const onGameListChanged = vi.fn();
-  render(
+  const screenWith = (settings: Settings) => (
     <GameScreen
-      db={db} engine={engine} coach={coach} profile={o.profile ?? defaultProfile()} settings={o.settings ?? DEFAULT_SETTINGS}
+      db={db} engine={engine} coach={coach} profile={o.profile ?? defaultProfile()} settings={settings}
       onProfile={onProfile} onSettings={() => {}} onGameListChanged={onGameListChanged}
       rng={() => 0.5} startFen={startFen} coachOffline={false}
-    />,
+    />
   );
-  return { db, engine, coach, onProfile, onGameListChanged };
+  const { rerender } = render(screenWith(o.settings ?? DEFAULT_SETTINGS));
+  return { db, engine, coach, onProfile, onGameListChanged, setSettings: (s: Settings) => rerender(screenWith(s)) };
 }
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -135,6 +145,41 @@ const lastRecord = (onProfile: ReturnType<typeof vi.fn>) => {
   const p = onProfile.mock.calls.at(-1)![0] as ProfileData;
   return p.moves.opening.at(-1);
 };
+
+const blunder = (bestUci = 'd2d4', bestSan = 'd4'): Verdict => ({
+  flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
+  recommendation: 'take_back', bestUci, bestSan, refutationSan: [],
+});
+const mistakeMessage = (watch?: WatchPly[]): CoachMessage => ({
+  id: 'm1', kind: 'mistake', source: 'template', arrows: [{ from: 'e7', to: 'e5', color: 'red' }], verdict: blunder(),
+  explanation: { whatHappened: 'After that, something bad happens.', lesson: 'Look first.' }, ...(watch ? { watch } : {}),
+});
+const revealMessage = (): CoachMessage => ({
+  id: 'reveal-1', kind: 'post_move', source: 'template', verdict: blunder(), topKind: null, explained: true, reveal: true,
+  summary: 'The better move was d4.', arrows: [{ from: 'd2', to: 'd4', color: 'green' }],
+  explanation: { whatHappened: 'd4 takes the centre.' },
+});
+/** A coach that flags `bad` (uci) as a blunder, with a Show me / Play on reveal and the hint ladder. */
+function mistakeCoach(bad: string, watch?: WatchPly[]) {
+  const coach = fakeCoach();
+  const ok = coach.onUserMove;
+  coach.onUserMove = vi.fn(async (g, move) => (move.uci === bad ? { verdict: blunder(), message: mistakeMessage(watch) } : ok(g, move)));
+  coach.hintStep = vi.fn((step: 1 | 2) => ({ text: `hint ${step}`, highlight: step === 2 ? ['d2'] : [] }));
+  coach.showMe = vi.fn(() => revealMessage());
+  coach.playOnReveal = vi.fn(() => revealMessage());
+  return coach;
+}
+/** The watch plies for `line` played from `fen` (opponent first). */
+function plies(fen: string, line: string[]): WatchPly[] {
+  const c = new Chess(fen);
+  return line.map((uci, i) => {
+    const san = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4) }).san;
+    return { uci, san, fen: c.fen(), by: i % 2 === 0 ? 'opponent' : 'user' };
+  });
+}
+const fenAfter = (fen: string, line: string[]) => { const c = new Chess(fen); for (const u of line) c.move({ from: u.slice(0, 2), to: u.slice(2, 4) }); return c.fen(); };
+const savedGame = async (db: Db) => db.getGame((await db.currentGameId())!);
+const boardEl = () => screen.getByTestId('board').closest('.board')!;
 
 describe('GameScreen', () => {
   it('asks for the promotion piece and plays the chosen one', async () => {
@@ -218,7 +263,7 @@ describe('GameScreen', () => {
     const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
       recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] };
     const mistake: CoachMessage = { id: 'm1', kind: 'mistake', source: 'template', arrows: [], verdict,
-      explanation: { whatHappened: 'Bad.', better: 'The better move was d4.', lesson: 'Look first.' } };
+      explanation: { whatHappened: 'Bad.', lesson: 'Look first.' } };
     const ok = coach.onUserMove;
     coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
     const { onProfile } = await setup(undefined, { coach });
@@ -441,7 +486,7 @@ describe('GameScreen', () => {
     const coach = fakeCoach();
     const mistake: CoachMessage = {
       id: 'm1', kind: 'mistake', source: 'template', arrows: [],
-      explanation: { whatHappened: 'After e4, something bad happens.', better: 'The better move was d4.', lesson: 'Look first.' },
+      explanation: { whatHappened: 'After e4, something bad happens.', lesson: 'Look first.' },
       verdict: { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
         recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] },
     };
@@ -498,18 +543,10 @@ describe('GameScreen', () => {
     await waitFor(() => expect(onGameListChanged).toHaveBeenCalledTimes(2));
   });
 
-  it('after a take-back, replaying the better move the card showed counts as assisted at any hint count', async () => {
-    for (const hintsTaken of [0, 2, 3]) {
+  it('after a take-back, replaying the better move without Show me is not assisted, at any hint count', async () => {
+    for (const hintsTaken of [0, 1, 2]) {
       cleanup();
-      const coach = fakeCoach();
-      const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
-        recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] };
-      const mistake: CoachMessage = { id: 'm1', kind: 'mistake', source: 'template', arrows: [], verdict,
-        explanation: { whatHappened: 'Bad.', better: 'The better move was d4.', lesson: 'Look first.' } };
-      const ok = coach.onUserMove;
-      coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
-      coach.hint = vi.fn((step: 1 | 2 | 3) => `hint ${step}`);
-      coach.hintStep = vi.fn((step: 1 | 2) => ({ text: `hint ${step}`, highlight: [] }));
+      const coach = mistakeCoach('e2e4');
       const { onProfile } = await setup(undefined, { coach });
       fireEvent.click(await screen.findByRole('button', { name: 'White' }));
       await waitFor(() => expect(board.options?.allowDragging).toBe(true));
@@ -522,18 +559,12 @@ describe('GameScreen', () => {
       onProfile.mockClear();
       drop('d2', 'd4');
       await waitFor(() => expect(onProfile).toHaveBeenCalled());
-      expect(lastRecord(onProfile)?.assisted).toBe(true);
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
     }
   });
 
-  it('after a take-back, a different move found without Hint 3 is not assisted', async () => {
-    const coach = fakeCoach();
-    const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
-      recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] };
-    const mistake: CoachMessage = { id: 'm1', kind: 'mistake', source: 'template', arrows: [], verdict,
-      explanation: { whatHappened: 'Bad.', better: 'The better move was d4.', lesson: 'Look first.' } };
-    const ok = coach.onUserMove;
-    coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
+  it('after a take-back, a different move found on one\'s own is not assisted', async () => {
+    const coach = mistakeCoach('e2e4');
     const { onProfile } = await setup(undefined, { coach });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
@@ -543,6 +574,262 @@ describe('GameScreen', () => {
     drop('c2', 'c4');
     await waitFor(() => expect(onProfile).toHaveBeenCalled());
     expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+  });
+});
+
+describe('GameScreen mistake flow', () => {
+  async function blunderE4(o: SetupOpts = {}) {
+    const coach = o.coach ?? mistakeCoach('e2e4');
+    const ctx = await setup(undefined, { ...o, coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    await screen.findByRole('alertdialog');
+    return { ...ctx, coach };
+  }
+
+  it('the card names no better move and shows no green arrow', async () => {
+    await blunderE4();
+    const card = screen.getByRole('alertdialog');
+    expect(card).toHaveTextContent('✗ Blunder');
+    expect(card).not.toHaveTextContent(/better move|\bd4\b/i);
+    expect(arrowColors()).toEqual(['red']);
+  });
+
+  it('Take it back offers Hint 1, Hint 2 and Show me; Show me reveals the move and the next move is assisted', async () => {
+    const { coach, onProfile } = await blunderE4();
+    fireEvent.click(screen.getByRole('button', { name: 'Take it back' }));
+    expect(await screen.findByRole('button', { name: 'Hint 1' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Hint 2' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Show me' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Hint 3' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hint 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hint 2' }));
+    expect(marks()).toEqual(['d2:ring']);
+    expect(arrowColors()).not.toContain('green');
+    fireEvent.click(screen.getByRole('button', { name: 'Show me' }));
+    expect(await screen.findByText('The better move was d4.')).toBeInTheDocument();
+    expect(screen.getByText('d4 takes the centre.')).toBeInTheDocument();
+    expect(marks()).toEqual([]); // the reveal's arrow replaces the Hint 2 ring
+    expect(arrowColors()).toEqual(['green']);
+    expect(screen.getByRole('button', { name: 'Show me' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Show me' }));
+    expect(coach.showMe).toHaveBeenCalledTimes(1);
+    onProfile.mockClear();
+    drop('d2', 'd4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)).toMatchObject({ assisted: true });
+  });
+
+  it('Show me, then another move from that position: still assisted', async () => {
+    const { onProfile } = await blunderE4();
+    fireEvent.click(screen.getByRole('button', { name: 'Take it back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show me' }));
+    onProfile.mockClear();
+    drop('c2', 'c4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBe(true);
+  });
+
+  it('Play on shows the reveal expanded in "Your last move", with its green arrow until the opponent replies', async () => {
+    const coach = mistakeCoach('e2e4');
+    const { engine } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    await screen.findByRole('alertdialog');
+    engine.hold = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Play on' }));
+    expect(coach.playOn).toHaveBeenCalledTimes(1);
+    expect(coach.playOnReveal).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('The better move was d4.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Your last move/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(arrowColors()).toContain('green');
+    act(() => engine.release());
+    await waitFor(() => expect(fen()).toContain(' w '));
+    expect(screen.getByRole('button', { name: /Your last move/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(arrowColors()).not.toContain('green');
+  });
+
+  it('take-back takes the move off the saved counts, lines included', async () => {
+    const { db } = await blunderE4({ settings: LINES_ON });
+    await waitFor(async () => expect(await savedGame(db)).toMatchObject({ userMoves: 1, attackLinesMoves: 1 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Take it back' }));
+    await waitFor(async () => expect(await savedGame(db)).toMatchObject({ userMoves: 0, attackLinesMoves: 0 }));
+    drop('d2', 'd4');
+    await waitFor(async () => expect(await savedGame(db)).toMatchObject({ userMoves: 1, attackLinesMoves: 1 }));
+  });
+
+  describe('watch what happens', () => {
+    // 1.a3 (flagged); the watched line: ...h6 2.b3 g6 3.c3.
+    const AFTER_A3 = fenAfter(START, ['a2a3']);
+    const LINE = ['h7h6', 'b2b3', 'g7g6', 'c2c3'];
+    const WATCH = plies(AFTER_A3, LINE);
+
+    async function blunderA3() {
+      const coach = mistakeCoach('a2a3', WATCH);
+      const ctx = await setup(undefined, { coach });
+      ctx.engine.replies.set(AFTER_A3, 'h7h6');
+      ctx.engine.replies.set(fenAfter(START, ['a2a3', 'h7h6', 'b2b3']), 'g7g6');
+      fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      drop('a2', 'a3');
+      await screen.findByRole('alertdialog');
+      return { ...ctx, coach };
+    }
+
+    it('steps through the line on a read-only board and goes back to the card', async () => {
+      await blunderA3();
+      fireEvent.click(screen.getByRole('button', { name: '▶ Watch what happens' }));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(fen()).toBe(WATCH[0].fen);
+      expect(board.options!.allowDragging).toBe(false);
+      expect(board.options!.arrows).toEqual([{ startSquare: 'h7', endSquare: 'h6', color: '#d9302c' }]);
+      fireEvent.click(screen.getByRole('button', { name: '▶' }));
+      expect(fen()).toBe(WATCH[1].fen);
+      expect(board.options!.arrows).toHaveLength(1);
+      expect(board.options!.arrows![0]).toMatchObject({ startSquare: 'b2', endSquare: 'b3' });
+      fireEvent.click(screen.getByRole('button', { name: '◀' }));
+      expect(fen()).toBe(WATCH[0].fen);
+      fireEvent.click(screen.getByRole('button', { name: 'Back to the card' }));
+      expect(fen()).toBe(AFTER_A3);
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    });
+
+    it('watched, then Play on: the line\'s user moves are assisted while the game follows it', async () => {
+      const { onProfile } = await blunderA3();
+      fireEvent.click(screen.getByRole('button', { name: '▶ Watch what happens' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Back to the card' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Play on' }));
+      await waitFor(() => expect(fen()).toBe(WATCH[0].fen));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('b2', 'b3');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBe(true);
+      await waitFor(() => expect(fen()).toBe(WATCH[2].fen));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('c2', 'c3');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBe(true);
+    });
+
+    it('not watched, then Play on: the same moves are independent', async () => {
+      const { onProfile } = await blunderA3();
+      fireEvent.click(screen.getByRole('button', { name: 'Play on' }));
+      await waitFor(() => expect(fen()).toBe(WATCH[0].fen));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('b2', 'b3');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+    });
+
+    it('after the game leaves the line once, a later move from the old line is independent', async () => {
+      const { onProfile } = await blunderA3();
+      fireEvent.click(screen.getByRole('button', { name: '▶ Watch what happens' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Back to the card' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Play on' }));
+      await waitFor(() => expect(fen()).toBe(WATCH[0].fen));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('d2', 'd3'); // leaves the line
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+      await waitFor(() => expect(fen()).toContain(' w '));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      onProfile.mockClear();
+      drop('b2', 'b3'); // the old line's user move
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+    });
+  });
+});
+
+describe('GameScreen history', () => {
+  it('viewing a past move during the user\'s turn is read-only and shows nothing from the live position', async () => {
+    const coach = mistakeCoach('e2e4');
+    const { engine, onProfile } = await setup(undefined, { coach, settings: LINES_ON });
+    engine.replies.set(fenAfter(START, ['a2a3']), 'h7h6');
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('a2', 'a3');
+    await waitFor(() => expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6'])));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    fireEvent.click(await screen.findByRole('button', { name: 'Take it back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Hint 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hint 2' }));
+    const live = fen();
+    const recorded = onProfile.mock.calls.length;
+    expect(marks()).toContain('d2:ring');
+    expect(marks().some((m) => m.endsWith(':attacked'))).toBe(true);
+    const view = async () => {
+      fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'a3' }));
+      expect(fen()).toBe(fenAfter(START, ['a2a3']));
+      expect(board.options!.allowDragging).toBe(false);
+      expect(boardEl().getAttribute('data-arrows')).not.toMatch(/green/);
+      expect(boardEl().getAttribute('data-arrows')).toBe('');
+      expect(marks().filter((m) => m.endsWith(':ring') || m.endsWith(':attacked'))).toEqual([]);
+      expect(screen.getByText('Viewing move 1')).toBeInTheDocument();
+      expect(screen.queryByText('Try again. Find a better move.')).not.toBeInTheDocument(); // coach panel hidden
+      expect(drop('b2', 'b3')).toBe(false);
+    };
+    await view();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to game' }));
+    expect(fen()).toBe(live);
+    expect(board.options!.allowDragging).toBe(true);
+    expect(marks()).toContain('d2:ring');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show me' }));
+    expect(arrowColors()).toContain('green');
+    await view();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to game' }));
+    expect(fen()).toBe(live);
+    expect(arrowColors()).toContain('green');
+    expect(onProfile).toHaveBeenCalledTimes(recorded); // viewing recorded nothing
+  });
+
+  it('◀ ▶ step through the moves; the last step returns to the live game', async () => {
+    const { engine } = await setup();
+    engine.replies.set(fenAfter(START, ['a2a3']), 'h7h6');
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('a2', 'a3');
+    await waitFor(() => expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6'])));
+    const history = screen.getByRole('group', { name: 'History' });
+    expect(within(history).getByRole('button', { name: 'Next move' })).toBeDisabled();
+    fireEvent.click(within(history).getByRole('button', { name: 'Previous move' }));
+    expect(fen()).toBe(fenAfter(START, ['a2a3']));
+    expect(screen.getByText('Viewing move 1')).toBeInTheDocument();
+    expect(within(history).getByRole('button', { name: 'Previous move' })).toBeDisabled();
+    fireEvent.click(within(history).getByRole('button', { name: 'Next move' }));
+    expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6']));
+    expect(screen.queryByText(/Viewing move/)).not.toBeInTheDocument();
+    expect(board.options!.allowDragging).toBe(true);
+  });
+
+  it('an opponent move while viewing keeps the view and shows "New move — Back to game"', async () => {
+    const { engine } = await setup();
+    engine.replies.set(fenAfter(START, ['a2a3']), 'h7h6');
+    engine.replies.set(fenAfter(START, ['a2a3', 'h7h6', 'b2b3']), 'g7g6');
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('a2', 'a3');
+    await waitFor(() => expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6'])));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    engine.hold = true;
+    drop('b2', 'b3');
+    await waitFor(() => expect(engine.calls.filter((c) => c.depth === 10)).toHaveLength(2));
+    fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'a3' }));
+    expect(screen.getByRole('button', { name: 'Back to game' })).toBeInTheDocument();
+    act(() => engine.release());
+    expect(await screen.findByRole('button', { name: 'New move — Back to game' })).toBeInTheDocument();
+    expect(fen()).toBe(fenAfter(START, ['a2a3']));
+    fireEvent.click(screen.getByRole('button', { name: 'New move — Back to game' }));
+    expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6', 'b2b3', 'g7g6']));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
   });
 });
 
@@ -663,7 +950,39 @@ describe('GameScreen board decorations', () => {
     });
   });
 
+  // A resumed game one move from mate (scholar's mate), after two earlier qualifying games.
+  const SCHOLAR = ['e2e4', 'e7e5', 'f1c4', 'b8c6', 'd1h5', 'g8f6'];
+  const twoGamesAndOneToFinish = async (db: Db) => {
+    for (let i = 1; i <= 2; i++) {
+      await db.saveGame({ id: `g${i}`, startedAt: i, userColor: 'w', moves: [], verdicts: [],
+        result: { winner: 'w', reason: 'checkmate' }, userMoves: 12, attackLinesMoves: 12 });
+    }
+    await db.saveGame({ id: 'g3', startedAt: 3, userColor: 'w', moves: SCHOLAR, verdicts: [], result: null,
+      userMoves: 12, attackLinesMoves: 12 });
+    await db.setCurrentGame('g3');
+  };
+
   it('suggests turning attack lines off after 3 qualifying games, until dismissed', async () => {
+    await setup(undefined, { settings: LINES_ON, prepare: twoGamesAndOneToFinish });
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('h5', 'f7');
+    expect(await screen.findByText(SUGGEST_LINES_OFF)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
+  });
+
+  it('does not suggest it once attack lines are already off', async () => {
+    const { setSettings } = await setup(undefined, { settings: LINES_ON, prepare: twoGamesAndOneToFinish });
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    setSettings(DEFAULT_SETTINGS);
+    drop('h5', 'f7');
+    const recap = await screen.findByRole('region', { name: /game over/i });
+    await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
+  });
+
+  it('does not suggest it in a ?fen= practice game', async () => {
     await setup('r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', {
       settings: LINES_ON,
       prepare: async (db) => {
@@ -676,19 +995,37 @@ describe('GameScreen board decorations', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
     drop('h5', 'f7');
-    expect(await screen.findByText(SUGGEST_LINES_OFF)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    const recap = await screen.findByRole('region', { name: /game over/i });
+    await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
   });
 
-  it('does not suggest it with fewer qualifying games', async () => {
-    await setup('r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', { settings: LINES_ON });
+  it('a move made after attack lines were shown, then turned off, is still assisted and counted', async () => {
+    const { db, onProfile, setSettings } = await setup(undefined, { settings: LINES_ON });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
-    drop('h5', 'f7');
-    const recap = await screen.findByRole('region', { name: /game over/i });
-    await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
-    expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
+    await waitFor(() => expect(boardEl().getAttribute('data-fen')).toBe(START));
+    setSettings(DEFAULT_SETTINGS);
+    drop('e2', 'e4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBe(true);
+    await waitFor(async () => expect(await savedGame(db)).toMatchObject({ attackLinesMoves: 1, userMoves: 1 }));
+  });
+
+  it('a promotion is counted once', async () => {
+    await setup(undefined, {
+      prepare: async (db) => {
+        await db.saveGame({ id: 'p1', startedAt: 1, userColor: 'w', verdicts: [], result: null, userMoves: 4, attackLinesMoves: 0,
+          moves: ['a2a4', 'b7b5', 'a4b5', 'a7a6', 'b5a6', 'c8b7', 'a6b7', 'e7e6'] });
+        await db.setCurrentGame('p1');
+      },
+    });
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    expect(drop('b7', 'a8')).toBe(false);
+    fireEvent.click(await screen.findByRole('button', { name: 'Queen' }));
+    const db = await openDb(`game-screen-${n - 1}`);
+    await waitFor(async () => expect(await db.getGame('p1')).toMatchObject({ userMoves: 5 }));
   });
 });
 

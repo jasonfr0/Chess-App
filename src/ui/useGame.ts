@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef } from 'react';
 import type { Coach, CoachMessage } from '../coach/coach';
 import type { Verdict } from '../coach/classify';
+import type { WatchPly } from '../coach/watch';
 import type { Engine } from '../engine/engine';
 import { GameState } from '../game/gameState';
 import { adjustOpponentRating, selectOpponentMove } from '../opponent/selectMove';
@@ -14,7 +15,8 @@ import type { Analysis, CoachLevel, Color, GameResult, ProfileData } from '../ty
 
 export type CoachApi = Pick<
   Coach,
-  'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'explainTopMove' | 'hint' | 'hintStep' | 'playOn' | 'checkConsequence' | 'recap'
+  'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'explainTopMove' | 'hintStep' | 'showMe' | 'playOnReveal'
+  | 'playOn' | 'checkConsequence' | 'recap'
 >;
 
 export interface GameDeps {
@@ -46,7 +48,7 @@ export interface GameView {
   coachMsg: CoachMessage | null;
   consequence: CoachMessage | null;
   mistake: CoachMessage | null;
-  /** Set after a take-back: the hint texts revealed so far (up to three). */
+  /** Set after a take-back: the hint texts revealed so far (Hint 1, then Hint 2). */
   hints: string[] | null;
   /** The squares the latest revealed hint rings ([] when it names none); cleared by the next move or take-back. */
   hintHighlight: string[];
@@ -71,6 +73,24 @@ export interface GameView {
    * a better move, so playing that move from this position is assisted.
    */
   betterShownFor: string | null;
+  /** A past ply being viewed (0-based index into the history); null means live. Read-only, changes nothing. */
+  viewPly: number | null;
+  /** The opponent moved while the user was viewing history. */
+  newMoveWhileViewing: boolean;
+  /** The mistake card's "Watch what happens" player: the line and the shown ply. */
+  watching: { plies: WatchPly[]; index: number } | null;
+  /**
+   * After watching, then Play on: the watched line (it starts at ply `watchStart`). A user move
+   * equal to the line's next user move, while the game still follows it, is assisted. Cleared once the
+   * game leaves the line.
+   */
+  watchedLine: WatchPly[] | null;
+  /** The Show me / Play on reveal of the better move, shown in "Your last move". */
+  reveal: CoachMessage | null;
+  /** FEN in which Show me was used: a move from it is assisted, and the reveal's green arrow shows there. */
+  showMeFor: string | null;
+  /** FEN in which attack lines were displayed during the user's decision: a move from it counts as made with them. */
+  linesShownFor: string | null;
 }
 
 export interface GameActions {
@@ -81,7 +101,20 @@ export interface GameActions {
   cancelPromotion(): void;
   takeBack(): void;
   playOn(): void;
-  nextHint(): void;
+  /** The take-back hint ladder: Hint 1, then Hint 2. */
+  hint(step: 1 | 2): void;
+  /** "Show me": reveals the better move; the move played from this position is assisted. */
+  showMe(): void;
+  /** History view: a past ply (0-based), or null for the live game. */
+  viewPly(n: number | null): void;
+  stepView(delta: -1 | 1): void;
+  /** "▶ Watch what happens" on the mistake card. */
+  watch(): void;
+  stepWatch(delta: -1 | 1): void;
+  /** "Back to the card". */
+  closeWatch(): void;
+  /** The board showed attack lines in this position during the user's decision. */
+  linesShown(fen: string): void;
   resign(): void;
   newGame(): void;
   dismissClockSuggestion(): void;
@@ -107,6 +140,8 @@ const INITIAL: GameView = {
   phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null, hintHighlight: [],
   promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false, linesOffSuggestion: false,
   lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null, betterShownFor: null,
+  viewPly: null, newMoveWhileViewing: false, watching: null, watchedLine: null, reveal: null, showMeFor: null,
+  linesShownFor: null,
 };
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
@@ -156,8 +191,9 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   d.current = deps;
   const profile = useRef(deps.profile);
   const settings = useRef(deps.settings);
-  /** The better move the mistake card showed before a take-back (uci from+to), until the retry is played. */
-  const retryBest = useRef<string | null>(null);
+  /** The ply count where the watched line starts (right after the mistake), and whether it was watched. */
+  const watchStart = useRef(0);
+  const watchedThis = useRef(false);
   const seen = useRef({ profile: deps.profile, settings: deps.settings });
   if (deps.profile !== seen.current.profile) { seen.current.profile = deps.profile; profile.current = deps.profile; }
   if (deps.settings !== seen.current.settings) { seen.current.settings = deps.settings; settings.current = deps.settings; }
@@ -203,7 +239,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     if (!game || view.current.phase === 'over') return;
     gen.current++;
     d.current.coach.cancelPending();
-    set({ phase: 'over', result, promotion: null, mistake: null, hints: null, hintHighlight: [] });
+    set({ phase: 'over', result, promotion: null, mistake: null, hints: null, hintHighlight: [], watching: null, watchedLine: null });
     save();
     const { db, coach, startFen } = d.current;
     if (!startFen) await db.setCurrentGame(null).catch(ignore);
@@ -224,7 +260,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       recap,
       levelNotes: review.changes.filter((c) => levelOverride[c.area] === undefined).map(levelChangeText),
       clockSuggestion: suggestClock(review.profile, settings.current) && !settings.current.clockMinutes,
-      linesOffSuggestion: suggestLinesOff(games),
+      // Only worth saying while the lines are on, and never in a ?fen= practice game.
+      linesOffSuggestion: !startFen && settings.current.attackLines && suggestLinesOff(games),
     });
   };
 
@@ -259,6 +296,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     );
     game.play(uci);
     save();
+    followWatchedLine(game);
     const result = game.result();
     if (result) { void endGame(result); return; }
     const consequence = d.current.coach.checkConsequence(game);
@@ -266,10 +304,23 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     // names a move the user may still play, so it folds away for their decision (top/book stay).
     const foldBetter = view.current.lastMove?.topKind === null;
     set({
-      phase: 'user', nudgeFor: null, questionsShownFor: null, betterShownFor: null,
+      phase: 'user', nudgeFor: null, questionsShownFor: null, betterShownFor: null, showMeFor: null, linesShownFor: null,
+      ...(view.current.viewPly !== null ? { newMoveWhileViewing: true } : {}),
       ...(foldBetter ? { lastMoveOpen: false } : {}), ...(consequence ? { consequence } : {}),
     });
     runPreMove(game);
+  };
+
+  /** Whether the game since the mistake is still a prefix of the watched line. */
+  const onWatchedLine = (game: GameState): boolean => {
+    const line = view.current.watchedLine;
+    if (!line) return false;
+    const since = game.history().slice(watchStart.current);
+    return since.length <= line.length && since.every((m, i) => m.uci === line[i].uci);
+  };
+  /** Once the game leaves the watched line (any move differs), the rule stops for good. */
+  const followWatchedLine = (game: GameState) => {
+    if (view.current.watchedLine && !onWatchedLine(game)) set({ watchedLine: null });
   };
 
   const checkUserMove = async (game: GameState, move: ReturnType<GameState['play']>, assisted: boolean) => {
@@ -289,7 +340,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const result = game.result();
     if (result) { void endGame(result); return; }
     if (res?.verdict.flagged && res.message) {
-      set({ phase: 'mistake', mistake: res.message });
+      watchedThis.current = false;
+      set({ phase: 'mistake', mistake: res.message, watching: null, reveal: null });
       return;
     }
     if (res?.message?.kind === 'post_move') set({ lastMove: res.message, lastMoveOpen: true });
@@ -336,6 +388,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const v = view.current;
     if (m.kind === 'pre_move' && v.coachMsg?.id === m.id) set({ coachMsg: m });
     if (m.kind === 'post_move' && v.lastMove?.id === m.id) set({ lastMove: m });
+    if (m.kind === 'post_move' && v.reveal?.id === m.id) set({ reveal: m });
     if (m.kind === 'mistake' && v.mistake?.id === m.id) set({ mistake: m });
   }), [deps.coach]);
 
@@ -379,32 +432,37 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const v = view.current;
       const game = v.game;
       if (v.phase !== 'user' || v.promotion || !game || !game.isUserTurn()) return false;
+      if (v.viewPly !== null || v.watching) return false; // history view and the watch player are read-only
       const from = uci.slice(0, 2);
       const to = uci.slice(2, 4);
       if (uci.length === 4 && game.needsPromotion(from, to)) {
         set({ promotion: { from, to } });
         return false;
       }
+      const fen = game.fen();
       // Using the nudge in this position (kept across a take-back to it) is help.
-      const nudged = v.nudgeFor === game.fen();
-      // Hint 3 names the move outright, so whatever is played after it is not found on one's own.
-      // After a take-back the mistake card has already shown the better move (text and arrow),
-      // so replaying exactly that move is not found on one's own either.
-      const replaysShownBest = v.hints !== null && retryBest.current === uci.slice(0, 4);
+      const nudged = v.nudgeFor === fen;
+      // Show me named the better move, so whatever is played after it is not found on one's own.
+      const shown = v.showMeFor === fen;
       // The re-expanded "stronger option" named this move during the decision.
-      const playsShownBetter = v.betterShownFor === game.fen() && v.lastMove?.verdict?.bestUci.slice(0, 4) === uci.slice(0, 4);
-      // Attack lines show the opponent's threats during the decision: such a move is helped.
-      const withLines = settings.current.attackLines;
-      const assisted = nudged || (v.hints?.length ?? 0) >= 3 || replaysShownBest || playsShownBetter || withLines;
-      retryBest.current = null;
+      const playsShownBetter = v.betterShownFor === fen && v.lastMove?.verdict?.bestUci.slice(0, 4) === uci.slice(0, 4);
+      // Attack lines show the opponent's threats during the decision: such a move is helped, even if
+      // the lines were turned off again before moving.
+      const withLines = settings.current.attackLines || v.linesShownFor === fen;
+      // After watching the line and playing on: its next user move, while the game still follows it.
+      const next = v.watchedLine && onWatchedLine(game) ? v.watchedLine[game.history().length - watchStart.current] : undefined;
+      const followsWatched = next?.by === 'user' && next.uci === uci;
+      const assisted = nudged || shown || playsShownBetter || withLines || followsWatched;
       let move;
       try { move = game.play(uci); } catch { return false; }
+      followWatchedLine(game);
       meta.current.userMoves++;
       if (withLines) meta.current.attackLinesMoves++;
       meta.current.lastWithLines = withLines;
       // Only the latest move's feedback is kept: the previous one goes now.
       set({
         phase: 'checking', coachMsg: null, consequence: null, hints: null, hintHighlight: [], lastMove: null, lastMoveOpen: false,
+        reveal: null,
       });
       save();
       void checkUserMove(game, move, assisted);
@@ -424,34 +482,83 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const game = view.current.game;
       if (!game || view.current.phase !== 'mistake') return;
       stopWork();
-      retryBest.current = view.current.mistake?.verdict?.bestUci.slice(0, 4) ?? null;
       game.takeBackUserMove();
       // The taken-back move no longer counts toward this game's moves.
       meta.current.userMoves = Math.max(0, meta.current.userMoves - 1);
       if (meta.current.lastWithLines) meta.current.attackLinesMoves = Math.max(0, meta.current.attackLinesMoves - 1);
       meta.current.lastWithLines = false;
       save();
-      set({ phase: 'user', mistake: null, hints: [], hintHighlight: [] });
+      // The position never happens, so a watched line plays no part.
+      set({ phase: 'user', mistake: null, hints: [], hintHighlight: [], watching: null, reveal: null });
     },
 
     playOn() {
-      if (view.current.phase !== 'mistake') return;
-      d.current.coach.playOn();
-      set({ mistake: null });
+      const v = view.current;
+      const game = v.game;
+      if (v.phase !== 'mistake' || !game) return;
+      const { coach } = d.current;
+      coach.playOn();
+      const reveal = coach.playOnReveal();
+      const watched = watchedThis.current && v.mistake?.watch ? v.mistake.watch : null;
+      watchStart.current = game.history().length;
+      // The reveal shows at once in "Your last move", with its green arrow until the opponent replies.
+      set({
+        mistake: null, watching: null, watchedLine: watched,
+        ...(reveal ? { reveal, lastMove: reveal, lastMoveOpen: true } : {}),
+      });
       void opponentTurn();
     },
 
-    nextHint() {
+    hint(step) {
       const hints = view.current.hints;
-      if (!hints || hints.length >= 3) return;
-      const step = (hints.length + 1) as 1 | 2 | 3;
-      if (step === 3) {
-        const text = d.current.coach.hint(3);
-        if (text) set({ hints: [...hints, text] });
-        return;
-      }
+      if (!hints || hints.length !== step - 1) return;
       const { text, highlight } = d.current.coach.hintStep(step);
       if (text) set({ hints: [...hints, text], hintHighlight: highlight });
+    },
+
+    showMe() {
+      const { hints, game, phase, reveal } = view.current;
+      if (!hints || !game || phase !== 'user' || reveal) return; // once per reveal
+      const message = d.current.coach.showMe();
+      if (!message) return;
+      // The reveal's green arrow replaces any Hint 2 ring.
+      set({ reveal: message, lastMove: message, lastMoveOpen: true, showMeFor: game.fen(), hintHighlight: [] });
+    },
+
+    viewPly(n) {
+      const game = view.current.game;
+      if (!game) return;
+      const last = game.history().length - 1;
+      // The last ply is the live position itself.
+      const ply = n === null || n >= last ? null : Math.max(0, n);
+      set({ viewPly: ply, ...(ply === null ? { newMoveWhileViewing: false } : {}) });
+    },
+
+    stepView(delta) {
+      const { game, viewPly } = view.current;
+      if (!game) return;
+      const at = viewPly ?? game.history().length - 1;
+      actions.viewPly(at + delta);
+    },
+
+    watch() {
+      const { phase, mistake } = view.current;
+      if (phase !== 'mistake' || !mistake?.watch?.length) return;
+      watchedThis.current = true;
+      set({ watching: { plies: mistake.watch, index: 0 }, viewPly: null, newMoveWhileViewing: false });
+    },
+
+    stepWatch(delta) {
+      const w = view.current.watching;
+      if (!w) return;
+      const index = Math.min(w.plies.length - 1, Math.max(0, w.index + delta));
+      if (index !== w.index) set({ watching: { ...w, index } });
+    },
+
+    closeWatch() { set({ watching: null }); },
+
+    linesShown(fen) {
+      if (view.current.linesShownFor !== fen) view.current = { ...view.current, linesShownFor: fen }; // no re-render needed
     },
 
     resign() {
@@ -491,7 +598,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     toggleLastMove() {
       const { lastMoveOpen, lastMove, game, phase } = view.current;
       const open = !lastMoveOpen;
-      const revealsBetter = open && lastMove?.topKind === null && phase === 'user' && !!game?.isUserTurn();
+      // A reveal needs no accounting here: Show me already counts, and after Play on its position is gone.
+      const revealsBetter = open && lastMove?.topKind === null && !lastMove.reveal && phase === 'user' && !!game?.isUserTurn();
       set({ lastMoveOpen: open, ...(revealsBetter ? { betterShownFor: game!.fen() } : {}) });
     },
 

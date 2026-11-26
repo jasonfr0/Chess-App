@@ -332,16 +332,6 @@ export class Coach {
       : { text: 'Look at which of your pieces could help.', highlight: [] };
   }
 
-  /**
-   * Compatibility for the current UI (removed with its last use): steps 1 and 2 are hintStep's text,
-   * step 3 is the Show me summary.
-   */
-  hint(step: 1 | 2 | 3): string {
-    const m = this.lastMistake;
-    if (!m) return '';
-    return step === 3 ? `The better move was ${m.verdict.bestSan}.` : this.hintStep(step).text;
-  }
-
   /** "Show me": reveals the better move for the last mistake. The UI counts the next move as helped. */
   showMe(): CoachMessage | null {
     return this.reveal();

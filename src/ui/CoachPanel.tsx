@@ -22,8 +22,12 @@ interface Props {
   onNudge: () => void;
   /** Shows the "coach offline" dot when an after-move explanation is a template because Claude is unavailable. */
   offline: boolean;
+  /** After a take-back: the revealed hint texts (Hint 1, then Hint 2). */
   hints: string[] | null;
-  onHint: () => void;
+  onHint: (step: 1 | 2) => void;
+  /** "Show me": reveals the better move (shown in "Your last move"); the next move counts as helped. */
+  onShowMe: () => void;
+  shownMe: boolean;
   /** Offered at light, where the coach stays quiet unless asked. Omitted when the user cannot move. */
   onAskCoach?: () => void;
 }
@@ -104,11 +108,12 @@ export function CoachPanel(p: Props) {
               <p>Try again. Find a better move.</p>
               <ol>{hints.map((h) => <li key={h}>{h}</li>)}</ol>
               <div className="hint-buttons">
-                {[1, 2, 3].map((step) => (
-                  <button key={step} type="button" disabled={hints.length !== step - 1} onClick={p.onHint}>
+                {([1, 2] as const).map((step) => (
+                  <button key={step} type="button" disabled={p.shownMe || hints.length !== step - 1} onClick={() => p.onHint(step)}>
                     Hint {step}
                   </button>
                 ))}
+                <button type="button" disabled={p.shownMe} onClick={p.onShowMe}>Show me</button>
               </div>
             </div>
           )}
