@@ -1,9 +1,10 @@
 import { Chess } from 'chess.js';
 import type { Move, Square } from 'chess.js';
-import type { Analysis, CoachLevel, Color, EngineLine, PlayedMove, Theme } from '../types';
+import type { Analysis, CoachLevel, Color, PlayedMove, Theme } from '../types';
 import type { BookHit } from '../openings/repertoire';
 import type { Verdict } from './classify';
 import { positionFacts } from './facts';
+import { lineScore } from './classify';
 import type { HangingPiece, PieceRef, PositionFacts } from './facts';
 
 export interface Candidate { san: string; uci: string; note: string; best: boolean }
@@ -39,7 +40,6 @@ export const THEME_LESSONS: Record<Theme, { title: string; habit: string }> = {
 };
 
 const NAMES: Record<PieceRef['piece'], string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
-const MATE = 10000;
 const CANDIDATE_WINDOW = 150;
 const MAX_CANDIDATES = 3;
 
@@ -75,7 +75,7 @@ function sanDest(san: string): string | null {
 }
 
 /** A phrase that is true of this move, derived from chess.js; falls back to a neutral note. */
-function moveNote(fen: string, m: Move): string {
+export function moveNote(fen: string, m: Move): string {
   const color = m.color;
   const names: Record<string, string> = NAMES;
   if (m.san.endsWith('#')) return 'checkmates';
@@ -101,11 +101,6 @@ function moveNote(fen: string, m: Move): string {
     return `develops your ${names[m.piece]}`;
   }
   return 'a solid move';
-}
-
-function lineScore(l: EngineLine): number {
-  if (l.mate !== null) return l.mate > 0 ? MATE : -MATE;
-  return l.cp ?? 0;
 }
 
 function engineCandidates(fen: string, analysis: Analysis): Candidate[] {
@@ -194,7 +189,7 @@ function forkAfterReply(ctx: MistakeContext): { attacker: PieceRef; targets: Pie
   }
 }
 
-function betterReason(ctx: MistakeContext): string {
+export function betterReason(ctx: MistakeContext): string {
   const { verdict, move } = ctx;
   const best = verdict.bestSan;
   const fenBest = tryFen(move.fenBefore, verdict.bestUci);

@@ -4,15 +4,16 @@ import { z } from 'zod/v4';
 import type { ProfileSummary } from '../types';
 import type { HangingPiece } from './facts';
 import type { Explanation, MistakeContext, PreMoveContext } from './templates';
+import type { PostMoveContext } from './postMove';
 
 export const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'] as const;
 export type ModelId = (typeof MODEL_IDS)[number];
 
 export interface FactPacket {
-  kind: 'pre_move' | 'mistake';
+  kind: 'pre_move' | 'post_move' | 'mistake';
   /** pre_move: the current position. mistake: the position before the user's move. */
   fen: string;
-  /** mistake only: the position after the user's move. */
+  /** post_move/mistake: the position after the user's move. */
   fenAfter?: string;
   /** pre_move only: the position before the opponent's last move. */
   fenBefore?: string;
@@ -119,13 +120,30 @@ function allowedFrom(explicit: string[], t: Explanation): string[] {
 }
 
 export function buildPacket(kind: 'pre_move', ctx: PreMoveContext, t: Explanation, p: ProfileSummary): FactPacket;
+export function buildPacket(kind: 'post_move', ctx: PostMoveContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(kind: 'mistake', ctx: MistakeContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(
-  kind: 'pre_move' | 'mistake',
-  ctx: PreMoveContext | MistakeContext,
+  kind: 'pre_move' | 'post_move' | 'mistake',
+  ctx: PreMoveContext | PostMoveContext | MistakeContext,
   t: Explanation,
   p: ProfileSummary,
 ): FactPacket {
+  if (kind === 'post_move') {
+    const c = ctx as PostMoveContext;
+    const v = c.verdict;
+    const { hanging, forks, material, inCheck } = c.factsAfter;
+    return {
+      kind, fen: c.move.fenBefore, fenAfter: c.move.fenAfter, hanging, sanHistory: [c.move.san],
+      allowedMoves: allowedFrom([c.move.san, v.bestSan, ...v.refutationSan], t),
+      facts: {
+        userMove: c.move.san, playedMoveIs: c.kind === 'book' ? 'book' : c.kind === 'top' ? 'top' : 'not_top',
+        bestMove: v.bestSan, refutation: v.refutationSan, cpLoss: v.cpLoss, area: v.area,
+        bookIdea: c.bookIdea, bookLine: c.lineName,
+        forksAfter: forks, materialAfter: material, inCheckAfter: inCheck,
+      },
+      template: t, profile: p,
+    };
+  }
   if (kind === 'pre_move') {
     const c = ctx as PreMoveContext;
     const { hanging, forks, material, inCheck } = c.facts;
@@ -170,6 +188,7 @@ Truth rule (strict):
 - Every claim about the position must come from the facts. Never claim a fork "wins" material; say it "attacks" the pieces.
 - "hanging" lists the pieces the opponent can win (in "fen" for pre_move, in "fenAfter" for a mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
 - When you write "<piece> on <square>", that piece must stand on that square in "fen", "fenAfter" or "fenBefore" (a candidate's note may also describe the position after that candidate).
+- For kind "post_move": explain why the played move works (playedMoveIs "top" or "book") or why the stronger move is better than the played one ("not_top"); short, plain. Use only the template's reasons and the facts; never add a reason of your own.
 - Keep candidates (san, uci, best) exactly as in the template; you may only improve each note, using only true statements from the template and facts.
 
 Style:

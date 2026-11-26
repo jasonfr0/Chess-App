@@ -35,7 +35,7 @@ export function areaOf(fen: string, plyCount: number, inBook: boolean): Area {
 }
 
 /** Side-to-move POV score of a line; mate for the side to move = +MATE. */
-function lineScore(l: EngineLine): number {
+export function lineScore(l: EngineLine): number {
   if (l.mate !== null) return l.mate > 0 ? MATE : -MATE;
   return l.cp ?? 0;
 }

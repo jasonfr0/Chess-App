@@ -283,3 +283,25 @@ describe('buildPacket', () => {
     expect(() => JSON.stringify(p)).not.toThrow();
   });
 });
+
+describe('buildPacket post_move', () => {
+  it('has kind, fenAfter and the allowed moves', async () => {
+    const { postMoveTemplate } = await import('../../src/coach/postMove');
+    const c = new Chess();
+    const m = c.move('a3');
+    const ctx = {
+      verdict: { flagged: false, severity: 'ok' as const, cpLoss: 80, area: 'opening' as const, theme: 'other' as const,
+        recommendation: 'play_on' as const, bestUci: 'e2e4', bestSan: 'e4', refutationSan: ['e5', 'Nf3'] },
+      move: { san: m.san, uci: 'a2a3', fenBefore: new Chess().fen(), fenAfter: c.fen(), color: m.color },
+      kind: null, bookIdea: null, lineName: null, factsAfter: positionFacts(c.fen()),
+    };
+    const t = postMoveTemplate(ctx).explanation;
+    const p = buildPacket('post_move', ctx, t, profile);
+    expect(p.kind).toBe('post_move');
+    expect(p.fenAfter).toBe(c.fen());
+    expect(p.fen).toBe(new Chess().fen());
+    for (const s of ['a3', 'e4', 'e5']) expect(p.allowedMoves).toContain(s);
+    expect(validateExplanation(t, p.allowedMoves)).toBe(true);
+    expect(validateClaims(t, p)).toBe(true);
+  });
+});
