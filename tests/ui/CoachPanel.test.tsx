@@ -124,6 +124,18 @@ describe('CoachPanel', () => {
     expect(screen.queryByRole('button', { name: 'Explain it' })).not.toBeInTheDocument();
   });
 
+  it('after Explain, the top-move line drops the "Do you see why" question', () => {
+    renderPanel({ lastMove: postMove({ explained: true }) });
+    expect(screen.getByText("✓ That's the top move.")).toBeInTheDocument();
+    expect(screen.queryByText(/Do you see why/)).not.toBeInTheDocument();
+  });
+
+  it('after Explain, the book-move line drops the "Do you see why" question', () => {
+    renderPanel({ lastMove: postMove({ topKind: 'book', summary: '✓ Book move. Do you see why?', explained: true }) });
+    expect(screen.getByText('✓ Book move.')).toBeInTheDocument();
+    expect(screen.queryByText(/Do you see why/)).not.toBeInTheDocument();
+  });
+
   it('a book move uses the book wording', () => {
     renderPanel({ lastMove: postMove({ topKind: 'book', summary: '✓ Book move. Do you see why?' }) });
     expect(screen.getByText('✓ Book move. Do you see why?')).toBeInTheDocument();

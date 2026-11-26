@@ -35,6 +35,13 @@ function claudeEligible(m: CoachMessage | null): m is CoachMessage {
   return m !== null && (m.topKind === null || (m.topKind === 'top' && m.explained === true));
 }
 
+/** Once explained, a top or book move's line no longer asks "Do you see why…?". */
+const EXPLAINED_SUMMARY = { top: "✓ That's the top move.", book: '✓ Book move.' } as const;
+
+function summaryOf(m: CoachMessage): string | undefined {
+  return m.topKind && m.explained ? EXPLAINED_SUMMARY[m.topKind] : m.summary;
+}
+
 function Explanation({ message }: { message: CoachMessage }) {
   const { whatHappened, better, lesson } = message.explanation;
   return (
@@ -73,7 +80,7 @@ export function CoachPanel(p: Props) {
               </button>
               {p.lastMoveOpen && (
                 <div className="section-body">
-                  {lastMove.summary && <p className="summary">{lastMove.summary}</p>}
+                  {summaryOf(lastMove) && <p className="summary">{summaryOf(lastMove)}</p>}
                   {lastMove.topKind !== null && lastMove.explained === false ? (
                     <div className="actions">
                       <button type="button" onClick={p.onAck}>Yes, I got it</button>
