@@ -35,6 +35,16 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Keeps the app chunk under the 500 kB warning limit; the PWA precache glob covers it.
+        manualChunks(id: string) {
+          if (/[\\/]node_modules[\\/](react|react-dom|react-chessboard|chess\.js)[\\/]/.test(id)) return 'vendor';
+        },
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     include: ['tests/**/*.test.{ts,tsx}'],
