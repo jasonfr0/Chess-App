@@ -203,7 +203,8 @@ export class Coach {
       });
       if (epoch !== this.epoch) return stub;
       if (!verdict.flagged) {
-        if (verdict.analysed === false) return { verdict, message: null };
+        // After-move feedback only where the coach still talks: full and guided.
+        if (verdict.analysed === false || (level !== 'full' && level !== 'guided')) return { verdict, message: null };
         return { verdict, message: this.postMove(verdict, move, topMoveKind(beforeAnalysis, move.uci, inBook), bookHit) };
       }
 

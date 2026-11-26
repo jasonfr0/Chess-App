@@ -615,6 +615,30 @@ describe('Coach post_move', () => {
     }
   });
 
+  it('gives no post_move and no Claude call at light or solo', async () => {
+    for (const level of ['light', 'solo'] as CoachLevel[]) {
+      for (const uci of ['e1e2', 'e1d2']) {
+        const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+        const { game, coach } = setup({ explain, levelFor: () => level });
+        const { verdict, message } = await coach.onUserMove(game, game.play(uci));
+        expect(verdict.flagged).toBe(false);
+        expect(message).toBeNull();
+        await flush();
+        expect(explain).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('gives post_move feedback at guided', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { game, coach } = setup({ explain, levelFor: () => 'guided' });
+    const { message } = await coach.onUserMove(game, game.play('e1d2'));
+    expect(message?.kind).toBe('post_move');
+    expect(message?.topKind).toBeNull();
+    await flush();
+    expect(explain).toHaveBeenCalledTimes(1);
+  });
+
   it('gives no post_move when the move could not be analysed', async () => {
     const coach = new Coach(makeDeps(new FakeEngine({})));
     const game = new GameState('w', KING_FEN);
