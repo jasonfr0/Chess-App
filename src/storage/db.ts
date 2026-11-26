@@ -50,6 +50,7 @@ export function defaultProfile(): ProfileData {
     themes,
     moves: { opening: [], middlegame: [], endgame: [] },
     levels: { opening: 'full', middlegame: 'full', endgame: 'light' },
+    version: 2, // keep equal to PROFILE_VERSION (profile.ts imports this module, so it can't be imported here)
   };
 }
 
@@ -89,6 +90,7 @@ const profileSchema = z.looseObject({
   }),
   levels: z.record(areaEnum, levelEnum),
   levelChangedAt: z.partialRecord(areaEnum, z.number()).optional(),
+  version: z.number().optional(), // absent in older backups
 });
 const backupSchema = z.object({
   app: z.literal('chess-coach'),

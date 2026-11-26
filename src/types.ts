@@ -32,4 +32,6 @@ export interface ProfileData {
   moves: Record<Area, MoveRecord[]>;
   levels: Record<Area, CoachLevel>;
   levelChangedAt?: Partial<Record<Area, number>>;
+  /** Profile schema version; absent means 1. */
+  version?: number;
 }

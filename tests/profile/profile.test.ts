@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emptyProfile, recordMove, summary, levelFor } from '../../src/profile/profile';
+import { emptyProfile, recordMove, summary, levelFor, migrateProfile, PROFILE_VERSION, RESET_NOTICE } from '../../src/profile/profile';
 import { defaultProfile, DEFAULT_SETTINGS } from '../../src/storage/db';
 import type { Verdict } from '../../src/coach/classify';
 import type { Theme, Area } from '../../src/types';
@@ -97,5 +97,39 @@ describe('profile', () => {
     const p = emptyProfile();
     expect(levelFor(p, DEFAULT_SETTINGS, 'endgame')).toBe('light');
     expect(levelFor(p, { ...DEFAULT_SETTINGS, levelOverride: { endgame: 'solo' } }, 'endgame')).toBe('solo');
+  });
+});
+
+describe('migrateProfile', () => {
+  const v1 = () => {
+    const p = emptyProfile();
+    delete p.version;
+    p.levels = { opening: 'guided', middlegame: 'guided', endgame: 'guided' };
+    p.themes.allowed_fork.count = 3;
+    p.levelChangedAt = { opening: 12 };
+    return p;
+  };
+  it('resets a v1 profile once, keeping themes and moves', () => {
+    const { profile, reset } = migrateProfile(v1());
+    expect(reset).toBe(true);
+    expect(profile.levels).toEqual({ opening: 'full', middlegame: 'full', endgame: 'light' });
+    expect(profile.themes.allowed_fork.count).toBe(3);
+    expect(profile.levelChangedAt).toBeUndefined();
+    expect('levelChangedAt' in profile).toBe(false);
+    expect(profile.version).toBe(PROFILE_VERSION);
+  });
+  it('is idempotent and returns the same object the second time', () => {
+    const first = migrateProfile(v1()).profile;
+    const second = migrateProfile(first);
+    expect(second.reset).toBe(false);
+    expect(second.profile).toBe(first);
+  });
+  it('emptyProfile is already version 2', () => {
+    expect(emptyProfile().version).toBe(2);
+    expect(PROFILE_VERSION).toBe(2);
+    expect(migrateProfile(emptyProfile()).reset).toBe(false);
+  });
+  it('notice text', () => {
+    expect(RESET_NOTICE).toBe("Coaching levels were reset: earlier games showed suggested moves, so they couldn't measure your own play.");
   });
 });

@@ -116,26 +116,20 @@ describe('weaning', () => {
     expect(reviewLevels(p).profile.levels.middlegame).toBe('light');
   });
 
-  describe('full -> guided judges every move (choices are always shown at full)', () => {
-    const fullWith = (n: number, bad: (i: number) => boolean) => {
+  describe('full -> guided uses the same non-assisted rule as every level', () => {
+    const fullWith = (n: number, assisted: boolean) => {
       let p = emptyProfile();
-      for (let i = 0; i < n; i++) {
-        const verdict: Verdict = { ...v('middlegame'), severity: bad(i) ? 'mistake' : 'ok', cpLoss: bad(i) ? 200 : 0 };
-        p = recordMove(p, verdict, { gameId: 'g', ply: i, fen: 'f', at: i, assisted: true });
-      }
+      for (let i = 0; i < n; i++) p = recordMove(p, v('middlegame'), { gameId: 'g', ply: i, fen: 'f', at: i, assisted });
       return p;
     };
-
-    it('40 assisted moves with 10% bad step down to guided', () => {
-      const r = reviewLevels(fullWith(40, (i) => i % 10 === 0)); // 4 bad
-      expect(r.changes).toEqual([{ area: 'middlegame', from: 'full', to: 'guided' }]);
+    it('40 good assisted records do not step down', () => {
+      expect(reviewLevels(fullWith(40, true)).changes).toEqual([]);
     });
-    it('more than 10% bad gives no step down', () => {
-      expect(reviewLevels(fullWith(40, (i) => i < 20 && i % 4 === 0)).changes).toEqual([]); // 5 bad, none in the last 20
+    it('40 good non-assisted records step down to guided', () => {
+      expect(reviewLevels(fullWith(40, false)).changes).toEqual([{ area: 'middlegame', from: 'full', to: 'guided' }]);
     });
     it('needs 40 records since the last change', () => {
-      expect(reviewLevels(fullWith(39, () => false)).changes).toEqual([]);
-      const p = fullWith(60, () => false);
+      const p = fullWith(60, false);
       expect(reviewLevels({ ...p, levelChangedAt: { middlegame: 21 } }).changes).toEqual([]);
       expect(reviewLevels({ ...p, levelChangedAt: { middlegame: 20 } }).profile.levels.middlegame).toBe('guided');
     });
@@ -152,11 +146,11 @@ describe('weaning', () => {
 
   it('copy', () => {
     expect(levelChangeText({ area: 'middlegame', from: 'full', to: 'guided' })).toBe(
-      "You've been avoiding mistakes in the middlegame. I'll hide your choices there — tap Show choices if you want them.");
+      "You've been finding good moves in the middlegame. I'll hide the questions there — tap Show questions if you want them.");
     expect(levelChangeText({ area: 'opening', from: 'guided', to: 'full' })).toBe(
-      "A few more slips lately in the opening — I'll show your choices again for a while.");
+      "A few more slips lately in the opening — I'll show the questions again for a while.");
     expect(levelChangeText({ area: 'endgame', from: 'solo', to: 'light' })).toBe(
-      "A few more slips lately in the endgame — I'll show your choices again for a while.");
+      "A few more slips lately in the endgame — I'll show the questions again for a while.");
   });
 
   it('copy for each step down matches what the new level does', () => {

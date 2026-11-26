@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi } from 'vitest';
+import { migrateProfile } from '../../src/profile/profile';
 import { openDb, DEFAULT_SETTINGS, ImportError, defaultProfile, type SavedGame } from '../../src/storage/db';
 
 let n = 0;
@@ -55,6 +56,30 @@ describe('db', () => {
     const s = await b.getSettings();
     expect(s.apiKey).toBe('sk-local');
     expect(s.opponentRating).toBe(900);
+  });
+
+  it('imports a backup without profile version, which then migrates with a reset', async () => {
+    const old = defaultProfile();
+    delete old.version;
+    old.levels = { opening: 'guided', middlegame: 'light', endgame: 'solo' };
+    const db = await openDb(fresh());
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [], profile: old }));
+    const got = await db.getProfile();
+    expect(got.version).toBeUndefined();
+    const m = migrateProfile(got);
+    expect(m.reset).toBe(true);
+    expect(m.profile.levels).toEqual({ opening: 'full', middlegame: 'full', endgame: 'light' });
+  });
+
+  it('round-trips a version 2 profile through export/import', async () => {
+    const a = await openDb(fresh());
+    const p = defaultProfile();
+    expect(p.version).toBe(2);
+    await a.saveProfile(p);
+    const b = await openDb(fresh());
+    await b.importAll(await a.exportAll());
+    expect((await b.getProfile()).version).toBe(2);
+    expect(migrateProfile(await b.getProfile()).reset).toBe(false);
   });
 
   it('rejects invalid imports and leaves data untouched', async () => {

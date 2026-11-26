@@ -6,6 +6,19 @@ const MAX_EXAMPLES = 10;
 export const MAX_RECORDS = 200;
 const DAY_MS = 86_400_000;
 
+export const PROFILE_VERSION = 2;
+export const RESET_NOTICE = "Coaching levels were reset: earlier games showed suggested moves, so they couldn't measure your own play.";
+
+/** One-time reset for profiles recorded when moves were shown before the user played. Themes and moves are kept. */
+export function migrateProfile(p: ProfileData): { profile: ProfileData; reset: boolean } {
+  if ((p.version ?? 1) >= PROFILE_VERSION) return { profile: p, reset: false };
+  const { levelChangedAt: _dropped, ...rest } = p;
+  return {
+    profile: { ...rest, levels: { opening: 'full', middlegame: 'full', endgame: 'light' }, version: PROFILE_VERSION },
+    reset: true,
+  };
+}
+
 /** Single source of truth for starting values lives in storage/db. */
 export function emptyProfile(): ProfileData {
   return defaultProfile();
