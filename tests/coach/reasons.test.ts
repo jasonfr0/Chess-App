@@ -185,9 +185,9 @@ describe('deriveReasons', () => {
   });
 
   it('gives the king a safe square against a back-rank threat, only when proven', () => {
-    const r = deriveReasons('3r2k1/5ppp/8/8/8/8/6PP/R5BK w - - 0 30', 'h2h3', { book: null, area: 'middlegame' });
+    const r = deriveReasons('3r2k1/5ppp/8/2b5/8/8/6PP/7K w - - 0 30', 'h2h3', { book: null, area: 'middlegame' });
     expect(r.effect).toBe('gives your king a safe square');
-    const calm = deriveReasons('6k1/5ppp/8/8/8/8/6PP/R5BK w - - 0 30', 'h2h3', { book: null, area: 'middlegame' });
+    const calm = deriveReasons('6k1/5ppp/8/2b5/8/8/6PP/7K w - - 0 30', 'h2h3', { book: null, area: 'middlegame' });
     expect(calm.effect ?? '').not.toContain('safe square');
   });
 
@@ -197,6 +197,37 @@ describe('deriveReasons', () => {
     expect(t).toContain('a8=Q turns your pawn into a queen.');
     expect(t).toContain('A new queen is the strongest piece on the board.');
     expect(sentences(t)).toBeLessThanOrEqual(3);
+  });
+
+  it('never claims a saved piece when the move gives check (regression)', () => {
+    const fen = '6k1/5pp1/3p3p/4N3/8/8/5PPP/R5K1 w - - 0 30';
+    expect(deriveReasons(fen, 'a1a8', { book: null, area: 'middlegame' }).effect ?? '').not.toContain('deals with the threat');
+    const withLine = deriveReasons(fen, 'a1a8', { book: null, area: 'middlegame', line: ['a1a8', 'g8h7', 'a8a7'] });
+    expect(withLine.effect ?? '').not.toContain('deals with the threat');
+  });
+
+  it('no safe-square claim for ordinary pawn moves (regression)', () => {
+    const fen = 'rnbqkbnr/1ppppppp/8/8/8/8/1PPPPPPP/RNBQKBNR w KQkq - 0 3';
+    for (const uci of ['d2d4', 'e2e4']) {
+      expect(deriveReasons(fen, uci, noBook).effect ?? '', uci).not.toContain('safe square');
+    }
+  });
+
+  it('a capture that promotes says so', () => {
+    const r = deriveReasons('r3k3/1P6/8/8/8/8/8/4K3 w - - 0 40', 'b7a8q', { book: null, area: 'endgame', line: ['b7a8q', 'e8d7', 'a8a7'] });
+    expect(r.effect).toContain('captures the rook on a8 and becomes a queen');
+  });
+
+  it('no attack claim from a piece that can be taken for free (regression)', () => {
+    const r = deriveReasons('7r/P3k3/8/8/8/8/8/4K3 w - - 0 50', 'a7a8q', { book: null, area: 'endgame' });
+    expect(r.fundamentals).not.toContain('attacks');
+    expect(r.effect ?? '').not.toContain('attacks their rook');
+  });
+
+  it('develops only in the opening', () => {
+    const fen = fenOf(['e4', 'e5', 'Nf3', 'Nc6']);
+    expect(deriveReasons(fen, 'b1c3', { book: null, area: 'middlegame' }).fundamentals).not.toContain('develops');
+    expect(deriveReasons(fen, 'b1c3', noBook).fundamentals).toContain('develops');
   });
 
   it('returns null when there is no checked fact to say', () => {
@@ -281,7 +312,7 @@ describe('reasonText sweep', () => {
     { sans: ['e4', 'e5', 'Nf3', 'Nf6'], line: ['b1c3', 'f8b4'] },
     { sans: ['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Bc5'], line: ['e1g1', 'g8f6'] },
     { sans: ['e4', 'e5'], line: ['d1h5', 'b8c6'] },
-    { sans: [], start: '3r2k1/5ppp/8/8/8/8/6PP/R5BK w - - 0 30', line: ['h2h3', 'g8f8'] },
+    { sans: [], start: '3r2k1/5ppp/8/2b5/8/8/6PP/7K w - - 0 30', line: ['h2h3', 'g8f8'] },
   ];
   it.each(fixtures.map((f) => [`${f.sans.join(' ')} ${f.line[0]}`, f] as const))('engine line %s', (_l, f) => {
     const fen = fenOf(f.sans, f.start);

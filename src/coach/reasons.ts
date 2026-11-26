@@ -210,9 +210,12 @@ function kingMoves(c: Chess | null, color: Color): number {
 function givesKingSquare(before: Chess, after: Chess, m: Move): boolean {
   if (m.piece === 'k' || before.inCheck()) return false;
   const king = after.board().flat().find((p) => p && p.type === 'k' && p.color === m.color);
-  if (!king) return false;
+  if (!king || king.square[1] !== (m.color === 'w' ? '1' : '8')) return false; // only on its own back rank
   if (kingMoves(before, m.color) !== 0 || kingMoves(withTurn(after.fen(), m.color), m.color) === 0) return false;
-  return after.moves({ verbose: true }).some((x) => (x.piece === 'r' || x.piece === 'q') && x.to[1] === king.square[1]);
+  // An enemy rook or queen can give check along that rank right now.
+  return after.moves({ verbose: true }).some(
+    (x) => (x.piece === 'r' || x.piece === 'q') && x.to[1] === king.square[1] && /[+#]$/.test(x.san),
+  );
 }
 
 const PROMOTION_WHY: Record<'q' | 'r' | 'b' | 'n', string> = {
@@ -250,7 +253,9 @@ export function deriveReasons(
   const mate = m.san.endsWith('#');
   const check = m.san.endsWith('+');
 
-  if ((m.piece === 'n' || m.piece === 'b') && MINOR_HOME[color][m.from] === m.piece) found.add('develops');
+  if (opts.area === 'opening' && (m.piece === 'n' || m.piece === 'b') && MINOR_HOME[color][m.from] === m.piece) {
+    found.add('develops');
+  }
 
   // In the opening, only pawns and knights/bishops earn centre credit: an early queen or rook is no lesson.
   const centreOk = !castle && m.piece !== 'k' && !(opts.area === 'opening' && (m.piece === 'q' || m.piece === 'r'));
@@ -269,7 +274,10 @@ export function deriveReasons(
   // Only targets that could be won: undefended, or worth more than the attacker. Undefended first, then by value.
   const attackerValue = VALUE[m.promotion ?? m.piece];
   const undefended = (t: PieceRef) => after.attackers(t.square as Square, t.color).length === 0;
-  const attacked = castle ? [] : positionFacts(after.fen()).attackedBy(uci)
+  const factsAfter = positionFacts(after.fen());
+  // A piece that can itself be won right back is not "attacking" anything worth claiming.
+  const moverHanging = factsAfter.hanging.some((p) => p.square === m.to && p.color === color);
+  const attacked = castle || moverHanging ? [] : factsAfter.attackedBy(uci)
     .filter((t) => t.piece !== 'k' && !before.attackers(t.square as Square, color).includes(m.from))
     .filter((t) => undefended(t) || VALUE[t.piece] > attackerValue)
     .sort((a, b) => Number(undefended(b)) - Number(undefended(a)) || VALUE[b.piece] - VALUE[a.piece]);
@@ -303,7 +311,8 @@ export function deriveReasons(
   if (mate) action = 'gives checkmate';
   else if (m.captured) {
     action = moveNote(fenBefore, m);
-    if (gain !== null && gain >= VALUE[m.captured]) action += ' for free';
+    if (m.promotion) action += ` and becomes a ${NAMES[m.promotion as PieceRef['piece']]}`;
+    else if (gain !== null && gain >= VALUE[m.captured]) action += ' for free';
     else if (gain !== null && gain > 0) consequences.push(ahead(gain));
   } else if (castle) action = 'castles';
   else if (m.promotion) action = `turns your pawn into a ${NAMES[m.promotion]}`;
@@ -316,10 +325,18 @@ export function deriveReasons(
     if (mateThreat) consequences.push('threatens checkmate');
     if (!m.captured && gain !== null && gain > 0) consequences.push(`wins ${amount(gain)}`);
     // A piece of ours that could be won before, and no longer can (moved away, guarded or freed).
-    const hangingAfter = hangingOf(after.fen(), color);
-    const saved = castle ? [] : hangingOf(fenBefore, color).filter((p) => {
+    // Never while giving check: with the opponent in check, legal captures are limited, so "not
+    // hanging" proves nothing. With a line, the piece must also survive the reply.
+    const hangingAfter = factsAfter.hanging.filter((p) => p.color === color);
+    let hangingAfterReply: PieceRef[] = [];
+    if (line?.[1]) {
+      const c = new Chess(after.fen());
+      hangingAfterReply = playUci(c, line[1]) && !c.inCheck() ? hangingOf(c.fen(), color) : [];
+    }
+    const saved = castle || check ? [] : hangingOf(fenBefore, color).filter((p) => {
       const now = p.square === m.from ? m.to : p.square;
-      return !hangingAfter.some((q) => q.square === now) && !defended.some((d) => d.square === p.square);
+      return !hangingAfter.some((q) => q.square === now) && !hangingAfterReply.some((q) => q.square === now) &&
+        !defended.some((d) => d.square === p.square);
     });
     if (saved.length > 0) consequences.push(`deals with the threat to your ${NAMES[saved[0].piece]} on ${saved[0].square}`);
     if (givesKingSquare(before, after, m)) consequences.push('gives your king a safe square');
@@ -359,11 +376,10 @@ export function reasonText(san: string, r: Reasons): string | null {
   if (r.checkmate) return `${san} is checkmate. That ends the game: you win.`;
   const primary = r.fundamentals[0];
   const idea = r.opening ? firstSentence(r.opening.idea) : null;
-  if (!r.effect && !r.opening && !primary) return null;
   const out: string[] = [];
   if (r.effect) out.push(`${san} ${r.effect}.`);
   else if (r.opening) out.push(`${san} is part of the ${r.opening.name}.`);
-  else out.push(`Here is the idea behind ${san}.`);
+  else return null; // a rule with nothing concrete to say about this game is filler
   if (r.promotion) return [...out, PROMOTION_WHY[r.promotion]].join(' ');
 
   if (r.opening) out.push(r.effect ? `It's part of the ${r.opening.name}.` : idea!);
