@@ -154,7 +154,9 @@ export function buildPacket(
   const c = ctx as MistakeContext;
   const v = c.verdict;
   const reply = opponentReply(v.refutationSan);
-  const { hanging, forks, material, inCheck } = c.factsAfter;
+  const { forks, material, inCheck } = c.factsAfter;
+  // Only the user's own pieces: an enemy piece left hanging is a capture they missed (the better move).
+  const hanging = c.factsAfter.hanging.filter((h) => h.color === c.move.color);
   return {
     kind, fen: c.move.fenBefore, fenAfter: c.move.fenAfter, hanging, sanHistory: [c.move.san],
     allowedMoves: [c.move.san, ...reply],

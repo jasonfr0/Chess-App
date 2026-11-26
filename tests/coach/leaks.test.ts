@@ -58,6 +58,28 @@ describe('revealsMove', () => {
     expect(revealsMove(text, 'Ke2', 'e1e2')).toBe(false);
   });
 
+  // The better move: Nxd5 (f3d5), taking an undefended queen.
+  it.each([
+    'Your knight on f3 could have taken their queen on d5 for free.',
+    'You missed that your knight could capture on d5.',
+    'Their queen on d5 was free for your knight.',
+    'Your knight could win their queen on d5.',
+    'Your knight was grabbing nothing while their queen on d5 sat there.',
+  ])('flags a missed capture: "%s"', (text) => {
+    expect(revealsMove(text, 'Nxd5', 'f3d5')).toBe(true);
+  });
+
+  it('flags a verb-less sentence naming the better move\'s square', () => {
+    expect(revealsMove('Your king is safer on e2.', 'Ke2', 'e1e2')).toBe(true);
+  });
+
+  it('lets the better move\'s square through when it is the played move\'s or the reply\'s square', () => {
+    // Played e2e4, reply d7d5: e2 and d5 are squares the user already sees.
+    expect(revealsMove('Your pawn left e2 empty.', 'Ke2', 'e1e2', ['e2e4', 'd7d5'])).toBe(false);
+    expect(revealsMove('Their pawn on d5 is strong.', 'Nxd5', 'f3d5', ['e2e4', 'd7d5'])).toBe(false);
+    expect(revealsMove('Their pawn on d5 is strong.', 'Nxd5', 'f3d5')).toBe(true);
+  });
+
   it('flags any castling talk when the better move castles', () => {
     expect(revealsMove('Getting your king safe by castling was better.', 'O-O', 'e1g1')).toBe(true);
   });

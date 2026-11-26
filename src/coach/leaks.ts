@@ -23,25 +23,37 @@ export function moveLeaks(text: string, allowedSan: string[] = []): string[] {
   return out;
 }
 
-const MOVE_VERB = /\b(play|plays|played|playing|push|pushes|pushing|move|moves|moved|moving|bring|brings|bringing|put|puts|putting|step|steps|stepping|go|goes|going|walk|walks|walking|jump|jumps|jumping|slide|slides|sliding|retreat|retreats|retreating|advance|advances|advancing|send|sends|sending)\b/i;
+const MOVE_VERB = new RegExp('\\b(' + [
+  'play|plays|played|playing|push|pushes|pushing|move|moves|moved|moving|bring|brings|bringing',
+  'put|puts|putting|step|steps|stepping|go|goes|going|walk|walks|walking|jump|jumps|jumping',
+  'slide|slides|sliding|retreat|retreats|retreating|advance|advances|advancing|send|sends|sending',
+  // Captures name a move too: "your knight could have taken their queen on d5".
+  'take|takes|took|taken|taking|capture|captures|captured|capturing|win|wins|won|winning',
+  'grab|grabs|grabbed|grabbing',
+].join('|') + ')\\b|\\b(for|was) free\\b', 'i');
 const squareRe = (sq: string) => new RegExp(`\\b${sq}\\b`, 'i');
 
 /**
  * True when `text` points at one particular move (the better move, `bestSan` / `bestUci`): it names
- * the move, a piece going to its destination, either of its squares in a sentence with a move verb,
- * or castling when the move castles. Errs towards flagging. Used on Claude's rewrite of the mistake
- * card, which must keep the better move hidden while the user decides.
+ * the move, a piece going to its destination, either of its squares in a sentence with a move verb
+ * (captures and "for free" included), its destination square in any sentence, or castling when the
+ * move castles. Errs towards flagging. Used on Claude's rewrite of the mistake card, which must keep
+ * the better move hidden while the user decides. `seenUci` lists moves already on the board (the
+ * played move and the reply): their squares may be named without a verb.
  */
-export function revealsMove(text: string, bestSan: string, bestUci: string): boolean {
+export function revealsMove(text: string, bestSan: string, bestUci: string, seenUci: string[] = []): boolean {
   const best = strip(bestSan);
   if (moveTokens(text).some((t) => isAllowedToken(t, new Set([best])))) return true;
   if (/^O-O/.test(best) && CASTLE.test(text)) return true;
   const from = bestUci.slice(0, 2);
   const to = bestUci.slice(2, 4);
+  const seen = new Set(seenUci.flatMap((u) => [u.slice(0, 2), u.slice(2, 4)]));
   for (const m of text.matchAll(PIECE_TO_SQUARE)) if (squareRe(to).test(m[0])) return true;
   if (new RegExp(`\\b(to|onto|into|towards?)\\s+${to}\\b`, 'i').test(text)) return true;
   for (const sentence of text.match(/[^.?!]+[.?!]?/g) ?? []) {
     if (MOVE_VERB.test(sentence) && (squareRe(to).test(sentence) || squareRe(from).test(sentence))) return true;
+    // Even with no verb ("your king is safer on e2"), the destination points at the move.
+    if (!seen.has(to) && squareRe(to).test(sentence)) return true;
   }
   return false;
 }

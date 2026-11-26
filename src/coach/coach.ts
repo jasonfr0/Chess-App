@@ -265,7 +265,7 @@ export class Coach {
         () => this.currentId === message.id, {
           // Claude's prose is checked too: no field may point at the better move.
           accept: (e) => ![e.whatHappened, e.better, e.lesson]
-            .some((t) => t !== undefined && revealsMove(t, verdict.bestSan, verdict.bestUci)),
+            .some((t) => t !== undefined && revealsMove(t, verdict.bestSan, verdict.bestUci, [move.uci, ...refutationUci.slice(0, 1)])),
           fields: withoutBetter,
         });
       return { verdict, message };

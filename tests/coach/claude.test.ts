@@ -176,6 +176,25 @@ describe('templates pass their own claim checks', () => {
   });
 });
 
+describe('mistake packet hanging list', () => {
+  it('lists only the user\'s own pieces, so a missed capture is never in the packet', () => {
+    const fenBefore = 'k7/8/8/3q4/8/4N3/7P/K7 w - - 0 1';
+    const c = new Chess(fenBefore);
+    c.move('h3');
+    const move = { san: 'h3', uci: 'h2h3', fenBefore, fenAfter: c.fen(), color: 'w' as const };
+    const factsAfter = positionFacts(move.fenAfter);
+    expect(factsAfter.hanging.some((h) => h.square === 'd5')).toBe(true);
+    const ctx: MistakeContext = {
+      verdict: { flagged: true, severity: 'blunder', cpLoss: 900, area: 'middlegame', theme: 'other',
+        recommendation: 'take_back', bestUci: 'e3d5', bestSan: 'Nxd5', refutationSan: ['Qd1+'] },
+      move, factsAfter, themeCount: 0,
+    };
+    const p = buildPacket('mistake', ctx, mistakeTemplate(ctx), profile);
+    expect(p.hanging.some((h) => h.square === 'd5')).toBe(false);
+    expect(p.hanging.every((h) => h.color === 'w')).toBe(true);
+  });
+});
+
 describe('explainWithClaude claim checks', () => {
   it('discards output that names a piece on the wrong square', async () => {
     const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Your bishop on f3 is strong.' } });
