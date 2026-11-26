@@ -9,29 +9,35 @@ import { areaOf, classifyMove } from './classify';
 import type { Verdict } from './classify';
 import { positionFacts } from './facts';
 import type { PieceRef } from './facts';
-import { THEME_LESSONS, mistakeTemplate } from './templates';
+import { THEME_LESSONS, THEME_WHY, mistakeTemplate } from './templates';
 import type { Explanation, MistakeContext } from './templates';
 import { preMoveCoaching } from './questions';
 import type { QuestionContext } from './questions';
-import { postMoveTemplate, topMoveKind } from './postMove';
-import type { PostMoveContext, TopKind } from './postMove';
+import { postMoveTemplate, revealTemplate, topMoveKind } from './postMove';
+import type { PostMoveContext, RevealContext, TopKind } from './postMove';
 import { deriveReasons } from './reasons';
 import type { Reasons } from './reasons';
-import { buildPacket } from './claude';
+import { buildPacket, buildRevealPacket } from './claude';
 import type { FactPacket } from './claude';
 
 export type Arrow = { from: string; to: string; color: 'green' | 'red' | 'blue' };
+/** A take-back hint and the squares to ring for it ([] when its text names none). */
+export interface HintStep { text: string; highlight: string[] }
 export interface CoachMessage {
   id: string; kind: 'pre_move' | 'post_move' | 'mistake' | 'consequence' | 'recap' | 'level_change';
   explanation: Explanation; arrows: Arrow[]; source: 'template' | 'claude';
   verdict?: Verdict;
   /** pre_move: what their last move did (null on move 1 as White), questions, and an optional hint. None names a move. */
   questions?: string[]; nudge?: string | null; theirMove?: string | null;
+  /** pre_move: the squares the nudge names, to ring once the nudge is shown ([] when it names none). */
+  nudgeHighlight?: string[];
   /**
    * post_move: the one-line verdict and the kind of move played. `explained` is false for a top or
    * book move until the user taps Explain; a "stronger option" explanation is shown at once (true).
    */
   summary?: string; topKind?: TopKind; explained?: boolean;
+  /** post_move: the better move after a mistake, revealed by Show me or after Play on (topKind is null). */
+  reveal?: boolean;
 }
 export interface CoachDeps {
   engine: Engine; explain: (p: FactPacket) => Promise<Explanation | null>;
@@ -48,10 +54,14 @@ const arrow = (uci: string, color: Arrow['color']): Arrow => ({ from: uci.slice(
 const yours = (p: PieceRef) => `your ${NAMES[p.piece]} on ${p.square}`;
 
 /** The questions, nudge and their-move text; a nudge that only repeats a question is dropped. */
-function preMoveFields(ctx: QuestionContext): Pick<CoachMessage, 'questions' | 'nudge' | 'theirMove'> {
-  const { theirMove, questions, nudge } = preMoveCoaching(ctx);
-  return { theirMove, questions, nudge: nudge !== null && questions.includes(nudge) ? null : nudge };
+function preMoveFields(ctx: QuestionContext): Pick<CoachMessage, 'questions' | 'nudge' | 'theirMove' | 'nudgeHighlight'> {
+  const { theirMove, questions, nudge, nudgeHighlight } = preMoveCoaching(ctx);
+  const repeats = nudge !== null && questions.includes(nudge);
+  return { theirMove, questions, nudge: repeats ? null : nudge, nudgeHighlight: repeats ? [] : nudgeHighlight };
 }
+
+/** A mistake card never carries a better-move field, even from Claude. */
+const withoutBetter = ({ better: _better, ...rest }: Explanation): Explanation => rest;
 
 function joinList(items: string[]): string {
   return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
@@ -104,7 +114,7 @@ function lostPiece(move: PlayedMove, refutationUci: string[], since: PlayedMove[
 }
 
 interface CacheEntry { fen: string; analysis: Promise<Analysis>; done?: Analysis }
-interface Mistake { verdict: Verdict; move: PlayedMove; refutationUci: string[]; plyAfter: number }
+interface Mistake { verdict: Verdict; move: PlayedMove; refutationUci: string[]; plyAfter: number; bestReasons: Reasons }
 interface Tracker { mistake: Mistake; opponentSans: string[]; gain: number; balanceAtMistake: number }
 
 export class Coach {
@@ -113,8 +123,8 @@ export class Coach {
   private epoch = 0;
   private currentId: string | null = null;
   private cache: CacheEntry[] = [];
-  /** The latest post_move and what it was built from, until the next user move. */
-  private post: { message: CoachMessage; ctx: PostMoveContext } | null = null;
+  /** The latest post_move and what it was built from (null for a reveal), until the next user move. */
+  private post: { message: CoachMessage; ctx: PostMoveContext | null } | null = null;
   private lastMistake: Mistake | null = null;
   private tracker: Tracker | null = null;
 
@@ -222,15 +232,19 @@ export class Coach {
       const ctx: MistakeContext = {
         verdict, move, factsAfter: positionFacts(move.fenAfter), themeCount: this.deps.themeCount(verdict.theme),
       };
+      // No better move and no green arrow: the user decides first (take back and look, or play on).
       const explanation = mistakeTemplate(ctx);
-      const arrows: Arrow[] = [];
-      if (refutationUci[0]) arrows.push(arrow(refutationUci[0], 'red'));
-      arrows.push(arrow(verdict.bestUci, 'green'));
+      const arrows: Arrow[] = refutationUci[0] ? [arrow(refutationUci[0], 'red')] : [];
       const message: CoachMessage = { id: this.newId(), kind: 'mistake', explanation, arrows, source: 'template', verdict };
-      this.lastMistake = { verdict, move, refutationUci, plyAfter: index + 1 };
+      const bestReasons = deriveReasons(move.fenBefore, verdict.bestUci, {
+        book: lookup(game.userColor, [...before.map((m) => m.san), verdict.bestSan]),
+        area: verdict.area,
+        line: beforeAnalysis.lines.find((l) => l.uci[0] === verdict.bestUci)?.uci,
+      });
+      this.lastMistake = { verdict, move, refutationUci, plyAfter: index + 1, bestReasons };
       this.currentId = message.id;
       this.publish(message, () => buildPacket('mistake', ctx, explanation, this.deps.profile()),
-        () => this.currentId === message.id);
+        () => this.currentId === message.id, undefined, withoutBetter);
       return { verdict, message };
     } catch {
       return stub;
@@ -243,12 +257,13 @@ export class Coach {
    */
   async explainTopMove(messageId: string): Promise<void> {
     const post = this.post;
-    if (!post || post.message.id !== messageId || post.message.explained !== false) return;
+    if (!post?.ctx || post.message.id !== messageId || post.message.explained !== false) return;
+    const ctx = post.ctx;
     const message: CoachMessage = { ...post.message, explained: true };
     post.message = message;
     this.emit(message);
-    if (post.ctx.kind !== 'top') return; // book moves keep the repertoire's own idea text
-    this.publish(message, () => buildPacket('post_move', post.ctx, message.explanation, this.deps.profile()),
+    if (ctx.kind !== 'top') return; // book moves keep the repertoire's own idea text
+    this.publish(message, () => buildPacket('post_move', ctx, message.explanation, this.deps.profile()),
       () => this.post === post, (upgraded) => { post.message = upgraded; });
   }
 
@@ -274,22 +289,64 @@ export class Coach {
     return message;
   }
 
-  hint(step: 1 | 2 | 3): string {
+  /**
+   * The take-back hint ladder. Hint 1: the theme's habit and why, ringing nothing. Hint 2: the piece
+   * the better move starts from, ringing its square; it never names a destination.
+   */
+  hintStep(step: 1 | 2): HintStep {
     const m = this.lastMistake;
-    if (!m) return '';
+    if (!m) return { text: '', highlight: [] };
     const { verdict, move } = m;
     if (step === 1) {
       const lesson = THEME_LESSONS[verdict.theme];
-      return `Remember the lesson (${lesson.title}): ${lesson.habit}`;
+      return { text: `Remember the lesson (${lesson.title}): ${lesson.habit} ${THEME_WHY[verdict.theme]}`, highlight: [] };
     }
-    if (step === 2) {
-      const from = verdict.bestUci.slice(0, 2);
-      const piece = new Chess(move.fenBefore).get(from as Square);
-      return piece
-        ? `Look at your ${NAMES[piece.type]} on ${from}.`
-        : `Look at your piece on ${from}.`;
-    }
-    return `Try ${verdict.bestSan}.`;
+    const from = verdict.bestUci.slice(0, 2);
+    let piece: ReturnType<Chess['get']>;
+    try { piece = new Chess(move.fenBefore).get(from as Square); } catch { piece = undefined; }
+    return piece && piece.color === move.color
+      ? { text: `Look at your ${NAMES[piece.type]} on ${from}.`, highlight: [from] }
+      : { text: 'Look at which of your pieces could help.', highlight: [] };
+  }
+
+  /**
+   * Compatibility for the current UI (removed with its last use): steps 1 and 2 are hintStep's text,
+   * step 3 is the Show me summary.
+   */
+  hint(step: 1 | 2 | 3): string {
+    const m = this.lastMistake;
+    if (!m) return '';
+    return step === 3 ? `The better move was ${m.verdict.bestSan}.` : this.hintStep(step).text;
+  }
+
+  /** "Show me": reveals the better move for the last mistake. The UI counts the next move as helped. */
+  showMe(): CoachMessage | null {
+    return this.reveal();
+  }
+
+  /** The same reveal, shown in "Your last move" after Play on. */
+  playOnReveal(): CoachMessage | null {
+    return this.reveal();
+  }
+
+  /**
+   * A post_move naming the better move, its checked reasons and a green arrow. Claude may rewrite it
+   * from a packet holding only the better move; the answer is dropped once the user moves again.
+   */
+  private reveal(): CoachMessage | null {
+    const m = this.lastMistake;
+    if (!m) return null;
+    const ctx: RevealContext = { verdict: m.verdict, move: m.move, bestReasons: m.bestReasons };
+    const { summary, explanation } = revealTemplate(ctx, positionFacts(m.move.fenAfter));
+    const message: CoachMessage = {
+      id: this.newId(), kind: 'post_move', explanation, source: 'template', verdict: m.verdict, summary,
+      topKind: null, explained: true, reveal: true, arrows: [arrow(m.verdict.bestUci, 'green')],
+    };
+    const post = { message, ctx: null };
+    this.post = post;
+    this.publish(message, () => buildRevealPacket(ctx, explanation, this.deps.profile()),
+      () => this.post === post, (upgraded) => { post.message = upgraded; });
+    return message;
   }
 
   playOn(): void {
@@ -398,14 +455,15 @@ export class Coach {
    */
   private publish(
     message: CoachMessage, packet: () => FactPacket, isCurrent: () => boolean,
-    onUpgrade?: (m: CoachMessage) => void,
+    onUpgrade?: (m: CoachMessage) => void, fields: (e: Explanation) => Explanation = (e) => e,
   ): void {
     const epoch = this.epoch;
     Promise.resolve()
       .then(() => this.deps.explain(packet()))
       .then((better) => {
         if (!better || epoch !== this.epoch || !isCurrent()) return;
-        const upgraded: CoachMessage = { ...message, explanation: { ...message.explanation, ...better }, source: 'claude' };
+        const explanation = fields({ ...message.explanation, ...better });
+        const upgraded: CoachMessage = { ...message, explanation, source: 'claude' };
         onUpgrade?.(upgraded);
         this.emit(upgraded);
       })

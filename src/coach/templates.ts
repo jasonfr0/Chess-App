@@ -31,8 +31,26 @@ export const THEME_LESSONS: Record<Theme, { title: string; habit: string }> = {
   other: { title: 'Better move available', habit: 'Compare your move with the alternatives before you play it.' },
 };
 
+/** Why each theme's habit matters, in one plain sentence. Names no square or move, so it never hints at one. */
+export const THEME_WHY: Record<Theme, string> = {
+  hanging_piece: 'A piece that nothing guards can be taken for nothing, and then you have less to fight with.',
+  ignored_threat: 'Their move often makes a threat, and missing it can cost you a piece.',
+  allowed_fork: 'A fork attacks two things at once, and you can usually save only one of them.',
+  missed_fork: 'They can usually save only one of the two pieces, so you win the other.',
+  missed_pin: 'A pinned piece cannot move without losing the piece behind it, so it is easy to attack.',
+  missed_mate: 'Checkmate ends the game at once, so it beats every other move.',
+  allowed_mate: 'A check you cannot answer is checkmate, and the game is over.',
+  early_queen: 'An early queen gets chased by smaller pieces, and each chase lets them bring out another piece.',
+  undeveloped: 'An attack with only a few pieces is easy to stop, and the pieces at home cannot help.',
+  king_safety: 'A king in the middle is easy to attack, and checks can come before you are ready.',
+  bad_trade: 'Pieces are worth different amounts, so a trade can leave you with less than they have.',
+  endgame_technique: 'With few pieces left, your king is safe to fight, and a pawn that reaches the end becomes a queen.',
+  other: 'Looking at a second idea before you move often finds a stronger one.',
+};
+
 export const NAMES: Record<PieceRef['piece'], string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
 
+const VALUE: Record<PieceRef['piece'], number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 100 };
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
 const describe = (p: PieceRef, viewer: Color) => `${p.color === viewer ? 'your' : 'their'} ${NAMES[p.piece]} on ${p.square}`;
 
@@ -145,6 +163,32 @@ function loss(p: HangingPiece, viewer: Color): string {
   return `can be won: ${describe(p.attacker, viewer)} can take it, and a ${NAMES[p.attacker.piece]} is worth less than a ${NAMES[p.piece]}`;
 }
 
+/**
+ * What the opponent's reply does, checked with chess.js: mate, a capture, a check, or an attack on
+ * one of the user's pieces that it could then win. Null when none of these is true.
+ */
+function replyNote(ctx: MistakeContext, reply: string): string | null {
+  const { move } = ctx;
+  try {
+    const c = new Chess(move.fenAfter);
+    const m = c.move(reply);
+    if (m.san.endsWith('#')) return 'It is checkmate.';
+    if (m.captured) {
+      const sq = m.isEnPassant() ? m.to[0] + m.from[1] : m.to;
+      return `It takes your ${NAMES[m.captured]} on ${sq}.`;
+    }
+    if (m.san.endsWith('+')) return 'It gives check.';
+    const uci = m.from + m.to + (m.promotion ?? '');
+    const facts = positionFacts(c.fen());
+    const hanging = new Set(facts.hanging.filter((p) => p.color === move.color).map((p) => p.square));
+    const target = facts.attackedBy(uci).filter((t) => t.piece !== 'k' && hanging.has(t.square))
+      .sort((a, b) => VALUE[b.piece] - VALUE[a.piece])[0];
+    return target ? `It attacks ${describe(target, move.color)}.` : null;
+  } catch {
+    return null;
+  }
+}
+
 function whatHappenedMistake(ctx: MistakeContext): string {
   const { verdict, move } = ctx;
   // Only the opponent's reply: the rest of the engine line is the user's own next moves.
@@ -172,17 +216,21 @@ function whatHappenedMistake(ctx: MistakeContext): string {
       break;
     }
   }
-  return `After ${move.san}, the engine's best answer for them is ${reply}.`;
+  const note = replyNote(ctx, reply);
+  return note ? `After ${move.san}, they can play ${reply}. ${note}` : `After ${move.san}, the engine's best answer for them is ${reply}.`;
 }
 
+/**
+ * The mistake card: what the move allows (the opponent's reply and checked facts) and the theme's
+ * habit with its why. It never names the better move: the user may still take back and look for it.
+ */
 export function mistakeTemplate(ctx: MistakeContext): Explanation {
   const { verdict, themeCount } = ctx;
   const lesson = THEME_LESSONS[verdict.theme];
   const prefix = themeCount >= 2 ? `This keeps coming up (${themeCount + 1} times). ` : '';
   return {
     whatHappened: whatHappenedMistake(ctx),
-    better: `The better move was ${verdict.bestSan}. ${betterReason(ctx)}`,
-    lesson: `${prefix}${lesson.title}: ${lesson.habit}`,
+    lesson: `${prefix}${lesson.title}: ${lesson.habit} ${THEME_WHY[verdict.theme]}`,
   };
 }
 

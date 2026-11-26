@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { Coach } from '../../src/coach/coach';
 import type { CoachDeps, CoachMessage } from '../../src/coach/coach';
 import type { Verdict } from '../../src/coach/classify';
-import { THEME_LESSONS } from '../../src/coach/templates';
+import { THEME_LESSONS, THEME_WHY } from '../../src/coach/templates';
+import { findJargon } from '../../src/coach/jargon';
 import type { Explanation } from '../../src/coach/templates';
 import type { FactPacket } from '../../src/coach/claude';
 import { HABIT_QUESTIONS } from '../../src/coach/questions';
@@ -91,10 +92,7 @@ describe('Coach.onUserMove', () => {
     expect(message?.source).toBe('template');
     expect(message?.verdict).toEqual(verdict);
     expect(message?.explanation.whatHappened).toContain('your knight on e5');
-    expect(message?.arrows).toEqual([
-      { from: 'd6', to: 'e5', color: 'red' },
-      { from: 'e1', to: 'e2', color: 'green' },
-    ]);
+    expect(message?.arrows).toEqual([{ from: 'd6', to: 'e5', color: 'red' }]);
     expect(engine.calls).toEqual([
       { fen: KNIGHT_FEN, multipv: 3, depth: 14 },
       { fen: KNIGHT_AFTER, multipv: 3, depth: 14 },
@@ -326,6 +324,7 @@ describe('Coach.preMove', () => {
     const m = await coach.preMove(new GameState('w'));
     expect(m?.questions?.length).toBeGreaterThan(0);
     expect(m?.nudge).toBeNull();
+    expect(m?.nudgeHighlight).toEqual([]);
   });
 
   it('after an opponent move: blue arrow only, a fact-backed nudge, and no Claude call', async () => {
@@ -340,6 +339,7 @@ describe('Coach.preMove', () => {
     expect(m?.theirMove).toContain('Their bishop now attacks your knight on f6');
     expect(m?.questions).toContain('One of your pieces is under attack and not safely protected. Can you find it?');
     expect(m?.nudge).toBe('Look at your knight on f6.');
+    expect(m?.nudgeHighlight).toEqual(['f6']);
     expect(engine.calls).toEqual([{ fen: BISHOP_FEN, multipv: 3, depth: 14 }]);
     await flush();
     expect(explain).not.toHaveBeenCalled();
@@ -689,14 +689,145 @@ describe('Coach post_move', () => {
 });
 
 describe('Coach.hint', () => {
-  it('climbs a ladder: theme habit, then piece square, then best move', async () => {
+  it('climbs a ladder: theme habit, then piece square; the compatibility hint(3) names the best move', async () => {
     const { coach, game } = await knightBlunder();
     game.takeBackUserMove();
     coach.cancelPending();
     expect(coach.hint(1)).toContain(THEME_LESSONS.hanging_piece.habit);
     expect(coach.hint(2)).toContain('e1');
     expect(coach.hint(2)).not.toContain('Ke2');
-    expect(coach.hint(3)).toContain('Ke2');
+    expect(coach.hint(3)).toBe('The better move was Ke2.');
+  });
+});
+
+describe('Coach.hintStep', () => {
+  it('Hint 1 is the lesson habit and its why, with no highlight', async () => {
+    const { coach } = await knightBlunder();
+    const h = coach.hintStep(1);
+    expect(h.text).toBe(`Remember the lesson (${THEME_LESSONS.hanging_piece.title}): ${THEME_LESSONS.hanging_piece.habit} ${THEME_WHY.hanging_piece}`);
+    expect(h.highlight).toEqual([]);
+    expect(h.text).not.toMatch(/\b[a-h][1-8]\b/);
+    expect(findJargon(h.text)).toEqual([]);
+  });
+
+  it('Hint 2 rings the square the better move starts from and names no destination', async () => {
+    const { coach } = await knightBlunder();
+    expect(coach.hintStep(2)).toEqual({ text: 'Look at your king on e1.', highlight: ['e1'] });
+  });
+
+  it('gives empty steps with no mistake', () => {
+    const coach = new Coach(makeDeps(new FakeEngine({})));
+    expect(coach.hintStep(1)).toEqual({ text: '', highlight: [] });
+    expect(coach.hintStep(2)).toEqual({ text: '', highlight: [] });
+  });
+});
+
+describe('spoiler-free mistake card', () => {
+  it('never shows the better move in the message, arrows or Claude packet', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { result } = await knightBlunder({ explain });
+    const message = result.message!;
+    const { bestSan, bestUci } = result.verdict;
+    expect(bestSan).toBe('Ke2');
+    expect(JSON.stringify(message.explanation)).not.toContain(bestSan);
+    expect(message.explanation.better).toBeUndefined();
+    expect(message.arrows.some((a) => a.color === 'green')).toBe(false);
+    expect(message.verdict?.severity).toBe('blunder');
+    const p = explain.mock.calls[0][0];
+    expect(p.allowedMoves).toEqual(['Ne5', 'dxe5']);
+    expect(JSON.stringify(p.facts)).not.toContain(bestSan);
+    expect(JSON.stringify(p.facts)).not.toContain(bestUci);
+    for (const t of [message.explanation.whatHappened, message.explanation.lesson ?? '']) expect(findJargon(t)).toEqual([]);
+  });
+
+  it('drops a "better" field from a Claude rewrite of the card', async () => {
+    const updates: CoachMessage[] = [];
+    const explain = () => Promise.resolve({ whatHappened: 'Your knight on e5 can be taken.', better: 'Moving your king was better.' });
+    const engine = new FakeEngine(knightTable());
+    const coach = new Coach(makeDeps(engine, { explain }));
+    coach.onUpdate((m) => updates.push(m));
+    const game = new GameState('w', KNIGHT_FEN);
+    await coach.onUserMove(game, game.play('f3e5'));
+    await flush();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].explanation.whatHappened).toBe('Your knight on e5 can be taken.');
+    expect(updates[0].explanation.better).toBeUndefined();
+  });
+});
+
+describe('Coach.showMe and playOnReveal', () => {
+  const expectReveal = (m: CoachMessage | null) => {
+    expect(m?.kind).toBe('post_move');
+    expect(m?.summary).toBe('The better move was Ke2.');
+    expect(m?.arrows).toEqual([{ from: 'e1', to: 'e2', color: 'green' }]);
+    expect(m?.topKind).toBeNull();
+    expect(m?.reveal).toBe(true);
+    expect(m?.explained).toBe(true);
+    expect(m?.explanation.whatHappened).toMatch(/^Ke2 /);
+    expect(m?.explanation.whatHappened).not.toMatch(/Ne5|dxe5/);
+    for (const t of [m!.summary!, m!.explanation.whatHappened, m!.explanation.better ?? '']) expect(findJargon(t)).toEqual([]);
+  };
+
+  it('showMe reveals the better move after a take-back', async () => {
+    const { coach, game } = await knightBlunder();
+    game.takeBackUserMove();
+    coach.cancelPending();
+    expectReveal(coach.showMe());
+  });
+
+  it('playOnReveal gives the same reveal after Play on', async () => {
+    const { coach } = await knightBlunder();
+    coach.playOn();
+    expectReveal(coach.playOnReveal());
+  });
+
+  it('returns null with no mistake', () => {
+    const coach = new Coach(makeDeps(new FakeEngine({})));
+    expect(coach.showMe()).toBeNull();
+    expect(coach.playOnReveal()).toBeNull();
+  });
+
+  it('asks Claude with a reveal packet from the position before the mistake, holding only the better move', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { coach } = await knightBlunder({ explain });
+    explain.mockClear();
+    coach.showMe();
+    await flush();
+    expect(explain).toHaveBeenCalledTimes(1);
+    const p = explain.mock.calls[0][0];
+    expect(p.kind).toBe('post_move');
+    expect(p.fen).toBe(KNIGHT_FEN);
+    expect(p.allowedMoves).toEqual(['Ke2']);
+    expect(p.reasons).toBeUndefined();
+    expect(p.bestReasons).toBeTruthy();
+    expect(JSON.stringify(p)).not.toMatch(/Ne5|dxe5/);
+  });
+
+  it('upgrades the reveal from Claude, but drops a stale answer once the user moves again', async () => {
+    const d1 = deferred<Explanation | null>();
+    const d2 = deferred<Explanation | null>();
+    let calls = 0;
+    const explain = vi.fn((p: FactPacket) => (p.kind === 'mistake' ? Promise.resolve(null) : [d1, d2][calls++].promise));
+    const updates: CoachMessage[] = [];
+    const { coach, game } = await knightBlunder({ explain });
+    coach.onUpdate((m) => updates.push(m));
+    game.takeBackUserMove();
+    coach.cancelPending();
+
+    const shown = coach.showMe()!;
+    d1.resolve({ whatHappened: 'Ke2 walks your king toward the middle.' });
+    await flush();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe(shown.id);
+    expect(updates[0].source).toBe('claude');
+    expect(updates[0].summary).toBe('The better move was Ke2.');
+
+    coach.showMe();
+    await coach.onUserMove(game, game.play('e1e2'));
+    const before = updates.length;
+    d2.resolve({ whatHappened: 'Ke2 is good.' });
+    await flush();
+    expect(updates.slice(before).some((m) => m.reveal)).toBe(false);
   });
 });
 

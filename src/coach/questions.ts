@@ -12,8 +12,11 @@ export interface QuestionContext {
   fen: string; lastMove: PlayedMove | null; history: PlayedMove[];
   userColor: Color; facts: PositionFacts; analysis: Analysis | null; book: BookHit | null;
 }
-/** Before-move coaching: what their move did, questions to think about, one optional hint. None names a move. */
-export interface PreMoveCoaching { theirMove: string | null; questions: string[]; nudge: string | null }
+/**
+ * Before-move coaching: what their move did, questions to think about, one optional hint. None names a move.
+ * `nudgeHighlight`: the squares the nudge names (each with a piece on it), to ring on the board; [] when none.
+ */
+export interface PreMoveCoaching { theirMove: string | null; questions: string[]; nudge: string | null; nudgeHighlight: string[] }
 
 /** Always true, so they never mislead. */
 export const HABIT_QUESTIONS = [
@@ -181,6 +184,16 @@ function openingItems(ctx: QuestionContext): Item[] {
   return out;
 }
 
+const SQUARE_RE = /\b[a-h][1-8]\b/g;
+
+/** Every square `text` names that has a piece on it in `fen`, in order, once each. */
+export function namedSquares(text: string | null, fen: string): string[] {
+  if (!text) return [];
+  let board: Chess;
+  try { board = new Chess(fen); } catch { return []; }
+  return [...new Set(text.match(SQUARE_RE) ?? [])].filter((sq) => board.get(sq as Square));
+}
+
 export function preMoveCoaching(ctx: QuestionContext): PreMoveCoaching {
   const allowed = ctx.lastMove ? [ctx.lastMove.san] : [];
   const safe = (s: string | null | undefined): s is string => !!s && moveLeaks(s, allowed).length === 0;
@@ -210,5 +223,5 @@ export function preMoveCoaching(ctx: QuestionContext): PreMoveCoaching {
 
   const questions = [...new Set(chosen.map((i) => i.question))];
   const nudge = chosen.map((i) => i.nudge).find(safe) ?? null;
-  return { theirMove, questions, nudge };
+  return { theirMove, questions, nudge, nudgeHighlight: namedSquares(nudge, ctx.fen) };
 }

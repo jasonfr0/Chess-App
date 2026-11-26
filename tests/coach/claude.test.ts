@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Chess } from 'chess.js';
-import { buildPacket, createExplainer, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
+import { buildPacket, buildRevealPacket, createExplainer, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
 import type { ClaudeClientLike, FactPacket } from '../../src/coach/claude';
 import type { Explanation, MistakeContext } from '../../src/coach/templates';
 import { mistakeTemplate } from '../../src/coach/templates';
@@ -252,7 +252,7 @@ describe('createExplainer', () => {
 });
 
 describe('buildPacket', () => {
-  it('allows the user move, best move and only the opponent reply from the refutation', () => {
+  it('allows only the user move and the opponent reply from the refutation (never the better move)', () => {
     const ctx = {
       verdict: { flagged: true, severity: 'blunder', cpLoss: 500, area: 'middlegame', theme: 'hanging_piece',
         recommendation: 'take_back', bestUci: 'g1f3', bestSan: 'Nf3', refutationSan: ['Qxh7#', 'Kf8'] },
@@ -261,8 +261,9 @@ describe('buildPacket', () => {
       themeCount: 2,
     } as unknown as MistakeContext;
     const p = buildPacket('mistake', ctx, { whatHappened: 'x' }, profile);
-    expect(p.allowedMoves).toEqual(expect.arrayContaining(['h6', 'Nf3', 'Qxh7#']));
+    expect(p.allowedMoves).toEqual(['h6', 'Qxh7#']);
     expect(p.allowedMoves).not.toContain('Kf8');
+    expect(JSON.stringify(p.facts)).not.toMatch(/Nf3|g1f3/);
     expect(p.facts.refutation).toEqual(['Qxh7#']);
     expect(p.fen).toBe('f');
     expect(p.fenAfter).toBe('g');
@@ -338,5 +339,74 @@ describe('buildPacket post_move', () => {
     expect(p.bestReasons).toBeNull();
     expect(validateExplanation(t, p.allowedMoves)).toBe(true);
     expect(validateClaims(t, p)).toBe(true);
+  });
+});
+
+describe('the mistake packet keeps the better move hidden', () => {
+  // Ne5?? hangs the knight to dxe5; the engine's better move is Ke2.
+  const fenBefore = '4k3/8/3p4/8/8/5N2/8/4K3 w - - 0 1';
+  const c = new Chess(fenBefore);
+  c.move('Ne5');
+  const move = { san: 'Ne5', uci: 'f3e5', fenBefore, fenAfter: c.fen(), color: 'w' as const };
+  const ctx: MistakeContext = {
+    verdict: { flagged: true, severity: 'blunder', cpLoss: 300, area: 'endgame', theme: 'hanging_piece',
+      recommendation: 'take_back', bestUci: 'e1e2', bestSan: 'Ke2', refutationSan: ['dxe5', 'e2e3'] },
+    move, factsAfter: positionFacts(move.fenAfter), themeCount: 0,
+  };
+  const t = mistakeTemplate(ctx);
+  const p = buildPacket('mistake', ctx, t, profile);
+
+  it('names only the move and the reply, with no best move anywhere in the packet', () => {
+    expect(p.allowedMoves).toEqual(['Ne5', 'dxe5']);
+    expect(JSON.stringify(p.facts)).not.toMatch(/Ke2|e1e2/);
+    expect(JSON.stringify(p.template)).not.toContain('Ke2');
+    expect(validateExplanation(t, p.allowedMoves)).toBe(true);
+    expect(validateClaims(t, p)).toBe(true);
+  });
+
+  it('a Claude rewrite naming the better move is thrown away', async () => {
+    const { client } = fake({ stop_reason: 'end_turn', parsed_output: {
+      whatHappened: 'After Ne5, your knight on e5 can be taken by dxe5.', better: 'Ke2 was better.',
+    } });
+    expect(await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('tells Claude never to name or point at the better move on the mistake card', async () => {
+    const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
+    await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
+    expect(reqs[0].system[0].text).toContain('For kind "mistake": never name or hint at a better move');
+  });
+});
+
+describe('buildRevealPacket', () => {
+  const fenBefore = '4k3/8/3p4/8/8/5N2/8/4K3 w - - 0 1';
+  const c = new Chess(fenBefore);
+  c.move('Ne5');
+  const move = { san: 'Ne5', uci: 'f3e5', fenBefore, fenAfter: c.fen(), color: 'w' as const };
+  const verdict = { flagged: true, severity: 'blunder' as const, cpLoss: 300, area: 'endgame' as const,
+    theme: 'hanging_piece' as const, recommendation: 'take_back' as const, bestUci: 'e1e2', bestSan: 'Ke2',
+    refutationSan: ['dxe5', 'e2e3'] };
+  const bestReasons = deriveReasons(fenBefore, 'e1e2', { book: null, area: 'endgame' });
+  const t: Explanation = { whatHappened: 'Ke2 brings your king toward the middle.' };
+  const p = buildRevealPacket({ verdict, move, bestReasons }, t, profile);
+
+  it('is a post_move packet from the position before the mistake, allowing only the better move', () => {
+    expect(p.kind).toBe('post_move');
+    expect(p.fen).toBe(fenBefore);
+    expect(p.fenAfter).toBeUndefined();
+    expect(p.allowedMoves).toEqual(['Ke2']);
+    expect(p.sanHistory).toEqual([]);
+    expect(p.hanging).toEqual([]);
+    expect(p.reasons).toBeUndefined();
+    expect(p.bestReasons).toEqual(bestReasons);
+    expect(p.facts).toEqual({ reveal: true, bestMove: 'Ke2', area: 'endgame' });
+    expect(JSON.stringify(p)).not.toMatch(/Ne5|dxe5|e2e3/);
+    expect(validateExplanation(t, p.allowedMoves)).toBe(true);
+    expect(validateClaims(t, p)).toBe(true);
+  });
+
+  it('a Claude rewrite naming the played move or reply is thrown away', async () => {
+    const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Ke2 is better than Ne5.' } });
+    expect(await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
   });
 });

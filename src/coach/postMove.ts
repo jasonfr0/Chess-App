@@ -102,3 +102,19 @@ export function postMoveTemplate(ctx: PostMoveContext): { summary: string; expla
     explanation: { whatHappened: lost ? `${answer} ${lost}` : answer, better: why ?? betterReason(mistakeCtx) },
   };
 }
+
+/** What a reveal ("Show me", or the reveal after Play on) is built from: the mistake and the better move's reasons. */
+export interface RevealContext { verdict: Verdict; move: PlayedMove; bestReasons: Reasons }
+
+/**
+ * The better move, revealed only after the user asked for it (Show me) or chose Play on. The
+ * explanation is the better move's own checked reasons, else the theme's fact-backed sentence.
+ */
+export function revealTemplate(ctx: RevealContext, factsAfter: PositionFacts): { summary: string; explanation: Explanation } {
+  const { verdict, move } = ctx;
+  const mistakeCtx: MistakeContext = { verdict, move, factsAfter, themeCount: 0 };
+  return {
+    summary: `The better move was ${verdict.bestSan}.`,
+    explanation: { whatHappened: reasonText(verdict.bestSan, ctx.bestReasons) ?? betterReason(mistakeCtx) },
+  };
+}

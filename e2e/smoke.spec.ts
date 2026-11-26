@@ -69,7 +69,7 @@ test('stops on a hanging move and takes it back', async ({ page }) => {
   await tapMove(page, 'f1', 'a6');
   const card = page.getByRole('alertdialog');
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await expect(card).toContainText('Better move');
+  await expect(card).not.toContainText('Better move'); // the better move stays hidden while the user decides
   await expect(card).toContainText('What it costs');
   await expect(card).toContainText('The lesson');
 

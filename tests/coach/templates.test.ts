@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
-import { THEME_LESSONS, mistakeTemplate, moveNote } from '../../src/coach/templates';
+import { THEME_LESSONS, THEME_WHY, betterReason, mistakeTemplate, moveNote } from '../../src/coach/templates';
 import type { Verdict } from '../../src/coach/classify';
 import { positionFacts } from '../../src/coach/facts';
 import type { PlayedMove, Theme } from '../../src/types';
@@ -32,8 +32,10 @@ describe('mistakeTemplate', () => {
     const e = mistakeTemplate(ctx(0));
     expect(e.whatHappened).toContain('Qxh4');
     expect(e.whatHappened).toContain('your knight on h4');
-    expect(e.better).toContain('Bc4');
-    expect(e.lesson).toContain(THEME_LESSONS.hanging_piece.habit);
+    expect(e.better).toBeUndefined();
+    expect(JSON.stringify(e)).not.toContain('Bc4');
+    expect(JSON.stringify(e)).not.toContain('c4');
+    expect(e.lesson).toBe(`${THEME_LESSONS.hanging_piece.title}: ${THEME_LESSONS.hanging_piece.habit} ${THEME_WHY.hanging_piece}`);
   });
 
   it('prefixes the lesson when the theme repeats', () => {
@@ -98,22 +100,49 @@ describe('mistakeTemplate wording', () => {
     const move = mk(new Chess().fen(), 'a2a3');
     const e = explain(move, verdictFor('other', 'e2e4', 'e4', ['e5', 'Nf3', 'Nc6']));
     expect(e.whatHappened).toBe("After a3, the engine's best answer for them is e5.");
-    for (const s of [e.whatHappened, e.better, e.lesson]) {
+    for (const s of [e.whatHappened, e.lesson ?? '']) {
       expect(s).not.toContain('Nf3');
       expect(s).not.toContain('Nc6');
     }
   });
 
-  it('missed_fork describes the fork the better move made', () => {
+  const reason = (move: PlayedMove, verdict: Verdict) =>
+    betterReason({ verdict, move, factsAfter: positionFacts(move.fenAfter), themeCount: 0 });
+
+  it('missed_fork: the reveal reason describes the fork the better move made, the card does not name it', () => {
     const move = mk('r3k3/7p/8/1N6/8/8/7P/7K w - - 0 1', 'h2h3');
-    const e = explain(move, verdictFor('missed_fork', 'b5c7', 'Nc7+', ['Kd7']));
-    expect(e.better).toBe('The better move was Nc7+. Nc7+ would have attacked both their rook on a8 and their king on e8 at once.');
+    const verdict = verdictFor('missed_fork', 'b5c7', 'Nc7+', ['Kd7']);
+    expect(reason(move, verdict)).toBe('Nc7+ would have attacked both their rook on a8 and their king on e8 at once.');
+    expect(JSON.stringify(explain(move, verdict))).not.toContain('Nc7');
   });
 
-  it('missed_mate says checkmate', () => {
+  it('missed_mate: the reveal reason says checkmate, the card does not name the move', () => {
     const move = mk('6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1', 'h2h3');
-    const e = explain(move, verdictFor('missed_mate', 'd1d8', 'Rd8#', ['h6']));
-    expect(e.better).toBe('The better move was Rd8#. Rd8# was checkmate.');
+    const verdict = verdictFor('missed_mate', 'd1d8', 'Rd8#', ['h6']);
+    expect(reason(move, verdict)).toBe('Rd8# was checkmate.');
+    expect(JSON.stringify(explain(move, verdict))).not.toContain('Rd8');
+  });
+
+  it('says what the reply does when the theme has no special wording', () => {
+    // Qe3?? puts the queen where Bc5 attacks it.
+    const move = mk('5b1k/8/8/8/8/8/8/2Q1K3 w - - 0 1', 'c1e3');
+    const e = explain(move, verdictFor('other', 'c1c2', 'Qc2', ['Bc5']));
+    expect(e.whatHappened).toBe('After Qe3, they can play Bc5. It attacks your queen on e3.');
+  });
+
+  it('a capture reply says what it takes', () => {
+    const move = mk('5b1k/8/8/8/8/8/8/2Q1K3 w - - 0 1', 'c1a3');
+    const e = explain(move, verdictFor('other', 'c1c2', 'Qc2', ['Bxa3']));
+    expect(e.whatHappened).toBe('After Qa3, they can play Bxa3. It takes your queen on a3.');
+  });
+
+  it('the card never names the better move or its squares, for any theme', () => {
+    const move = mk('4k3/8/3p4/8/8/5N2/8/4K3 w - - 0 1', 'f3e5');
+    for (const theme of Object.keys(THEME_LESSONS) as Theme[]) {
+      const e = explain(move, verdictFor(theme, 'e1e2', 'Ke2', ['dxe5']));
+      expect(e.better, theme).toBeUndefined();
+      expect(JSON.stringify(e), theme).not.toMatch(/Ke2|e2/);
+    }
   });
 });
 
@@ -124,6 +153,17 @@ describe('moveNote', () => {
     expect(moveNote(fen, new Chess(fen).move('Ra8+'))).toBe('gives check');
     const start = new Chess().fen();
     expect(moveNote(start, new Chess().move('Nf3'))).toBe('develops your knight');
+  });
+});
+
+describe('THEME_WHY', () => {
+  it('gives every theme a plain why with no squares, moves or banned words', () => {
+    for (const theme of Object.keys(THEME_LESSONS) as Theme[]) {
+      const why = THEME_WHY[theme];
+      expect(why, theme).toMatch(/^[A-Z].*\.$/);
+      expect(why, theme).not.toMatch(/\b[a-h][1-8]\b/);
+      expect(findJargon(why), theme).toEqual([]);
+    }
   });
 });
 
@@ -188,7 +228,7 @@ describe('no jargon in template text (sweep)', () => {
         // One theme per position, in turn: betterReason (the post_move fallback) is covered through it.
         const verdict: Verdict = { ...base, theme: THEMES[ply % THEMES.length], flagged: true, severity: 'blunder' };
         const e = mistakeTemplate({ verdict, move, factsAfter, themeCount: 2 });
-        texts.push(e.whatHappened, e.better ?? '', e.lesson ?? '');
+        texts.push(e.whatHappened, e.lesson ?? '', betterReason({ verdict, move, factsAfter, themeCount: 2 }));
         for (const t of texts) if (findJargon(t).length > 0) found.push(t);
       }
     }

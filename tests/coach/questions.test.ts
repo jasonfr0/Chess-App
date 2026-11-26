@@ -387,3 +387,41 @@ describe('win question only when the user is really winning something', () => {
     expect(r.nudge).toBe('Look at their bishop on d4.');
   });
 });
+
+describe('nudge highlight', () => {
+  const SQUARE = /\b[a-h][1-8]\b/g;
+  const expectHighlightMatchesText = (ctx: QuestionContext, label: string) => {
+    const r = preMoveCoaching(ctx);
+    const named = r.nudge ? [...new Set(r.nudge.match(SQUARE) ?? [])] : [];
+    expect(r.nudgeHighlight, label).toEqual(named);
+    const board = new Chess(ctx.fen);
+    for (const sq of r.nudgeHighlight) expect(board.get(sq as never), `${label}: ${sq}`).toBeTruthy();
+  };
+
+  it('rings the square a "Look at your knight on f6." nudge names', () => {
+    const r = preMoveCoaching(ctxFrom(['Bg5'], { start: '4k3/8/5n2/8/8/8/8/2B1K3 w - - 0 1' }));
+    expect(r.nudge).toBe('Look at your knight on f6.');
+    expect(r.nudgeHighlight).toEqual(['f6']);
+  });
+
+  it('rings nothing for a plan nudge that names no square', () => {
+    const r = preMoveCoaching(ctxFrom([]));
+    expect(r.nudge).toBe(rootPlan('w'));
+    expect(r.nudgeHighlight).toEqual([]);
+  });
+
+  it('rings nothing when there is no nudge', () => {
+    const r = preMoveCoaching(ctxFrom(['Ke7'], { start: '4k3/8/8/8/8/8/8/4K3 b - - 0 40' }));
+    expect(r.nudge).toBeNull();
+    expect(r.nudgeHighlight).toEqual([]);
+  });
+
+  it('every square named in a nudge is highlighted, and nothing else', () => {
+    expectHighlightMatchesText(ctxFrom(['Bb5'], { start: '4k3/3b4/8/8/8/3N4/8/4K3 b - - 0 30' }), 'hanging');
+    expectHighlightMatchesText(bareCtx('4k3/8/8/8/3b4/8/8/3RK3 w - - 0 30',
+      [{ uci: ['d1d4', 'e8e7', 'e1e2'], cp: 300, mate: null }]), 'win');
+    expectHighlightMatchesText(ctxFrom(['e4', 'e5']), 'book plan');
+    expectHighlightMatchesText(ctxFrom(['e4', 'e5', 'Nf3']), 'book plan (black)');
+    expectHighlightMatchesText(ctxFrom([]), 'root plan');
+  });
+});
