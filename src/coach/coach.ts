@@ -16,6 +16,8 @@ import { revealsMove } from './leaks';
 import type { QuestionContext } from './questions';
 import { postMoveTemplate, revealTemplate, topMoveKind } from './postMove';
 import type { PostMoveContext, RevealContext, TopKind } from './postMove';
+import { watchLine } from './watch';
+import type { WatchPly } from './watch';
 import { deriveReasons } from './reasons';
 import type { Reasons } from './reasons';
 import { buildPacket, buildRevealPacket } from './claude';
@@ -43,6 +45,8 @@ export interface CoachMessage {
   summary?: string; topKind?: TopKind; explained?: boolean;
   /** post_move: the better move after a mistake, revealed by Show me or after Play on (topKind is null). */
   reveal?: boolean;
+  /** mistake: the engine line to replay when the consequence takes several moves (a forced mate, or material lost after ply 1). */
+  watch?: WatchPly[];
 }
 export interface CoachDeps {
   engine: Engine; explain: (p: FactPacket) => Promise<Explanation | null>;
@@ -252,6 +256,8 @@ export class Coach {
       const explanation = mistakeTemplate(ctx);
       const arrows: Arrow[] = refutationUci[0] ? [arrow(refutationUci[0], 'red')] : [];
       const message: CoachMessage = { id: this.newId(), kind: 'mistake', explanation, arrows, source: 'template', verdict };
+      const watch = watchLine(move.fenAfter, afterAnalysis.lines[0]?.uci ?? [], game.userColor);
+      if (watch) message.watch = watch;
       const bestReasons = bestReasonsFor(move, game.userColor, before, verdict, beforeAnalysis);
       this.lastMistake = { verdict, move, refutationUci, plyAfter: index + 1, bestReasons };
       this.currentId = message.id;

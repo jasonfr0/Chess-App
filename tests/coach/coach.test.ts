@@ -977,3 +977,26 @@ describe('Coach.recap', () => {
     expect(lines(m).length).toBeLessThanOrEqual(3);
   });
 });
+
+describe('mistake card watch line', () => {
+  const BACK_RANK_FEN = 'rr4k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1';
+  const BACK_RANK_AFTER = 'rr4k1/5ppp/8/8/8/3R4/5PPP/6K1 b - - 1 1';
+
+  it('offers the engine line when the mistake allows a forced mate', async () => {
+    const engine = new FakeEngine({
+      [BACK_RANK_FEN]: [line(['h2h3'], -500)],
+      [BACK_RANK_AFTER]: [line(['a8a1', 'd3d1', 'a1d1'], null, 2)],
+    });
+    const coach = new Coach(makeDeps(engine));
+    const game = new GameState('w', BACK_RANK_FEN);
+    const { message } = await coach.onUserMove(game, game.play('d1d3'));
+    expect(message?.kind).toBe('mistake');
+    expect(message?.watch?.length).toBeGreaterThan(0);
+    expect(message?.watch?.at(-1)?.san).toBe('Rxd1#');
+  });
+
+  it('has no watch line for a one-move loss', async () => {
+    const { result } = await knightBlunder();
+    expect(result.message?.watch).toBeUndefined();
+  });
+});
