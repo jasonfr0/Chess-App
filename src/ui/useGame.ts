@@ -73,7 +73,7 @@ export interface GameView {
    * a better move, so playing that move from this position is assisted.
    */
   betterShownFor: string | null;
-  /** A past ply being viewed (0-based index into the history); null means live. Read-only, changes nothing. */
+  /** A past ply being viewed (0-based index into the history; -1 is the start); null means live. Read-only, changes nothing. */
   viewPly: number | null;
   /** The opponent moved while the user was viewing history. */
   newMoveWhileViewing: boolean;
@@ -540,8 +540,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const game = view.current.game;
       if (!game) return;
       const last = game.history().length - 1;
-      // The last ply is the live position itself.
-      const ply = n === null || n >= last ? null : Math.max(0, n);
+      // The last ply is the live position itself; -1 is the starting position.
+      const ply = n === null || n >= last ? null : Math.max(-1, n);
       set({ viewPly: ply, ...(ply === null ? { newMoveWhileViewing: false } : {}) });
     },
 

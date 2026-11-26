@@ -810,7 +810,7 @@ describe('GameScreen history', () => {
       expect(boardEl().getAttribute('data-arrows')).not.toMatch(/green/);
       expect(boardEl().getAttribute('data-arrows')).toBe('');
       expect(marks().filter((m) => m.endsWith(':ring') || m.endsWith(':attacked'))).toEqual([]);
-      expect(screen.getByText('Viewing move 1')).toBeInTheDocument();
+      expect(screen.getByText('Viewing move 1 (White)')).toBeInTheDocument();
       expect(screen.queryByText('Try again. Find a better move.')).not.toBeInTheDocument(); // coach panel hidden
       expect(drop('b2', 'b3')).toBe(false);
     };
@@ -842,7 +842,7 @@ describe('GameScreen history', () => {
     await waitFor(() => expect(marks()).toEqual(['e2:ring']));
     fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'a3' }));
     expect(marks()).toEqual([]);
-    expect(screen.getByRole('status')).toHaveTextContent('Viewing move 1 of 2.');
+    expect(screen.getByRole('status')).toHaveTextContent('Viewing move 1 (White) of 1.');
     fireEvent.click(screen.getByRole('button', { name: 'Back to game' }));
     expect(marks()).toEqual(['e2:ring']);
     expect(screen.getByRole('status')).toHaveTextContent('Your move.');
@@ -859,8 +859,15 @@ describe('GameScreen history', () => {
     expect(within(history).getByRole('button', { name: 'Next move' })).toBeDisabled();
     fireEvent.click(within(history).getByRole('button', { name: 'Previous move' }));
     expect(fen()).toBe(fenAfter(START, ['a2a3']));
-    expect(screen.getByText('Viewing move 1')).toBeInTheDocument();
+    expect(screen.getByText('Viewing move 1 (White)')).toBeInTheDocument();
+    // One more step back shows the starting position.
+    fireEvent.click(within(history).getByRole('button', { name: 'Previous move' }));
+    expect(fen()).toBe(START);
+    expect(screen.getByText('Viewing the start')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Viewing the start.');
     expect(within(history).getByRole('button', { name: 'Previous move' })).toBeDisabled();
+    fireEvent.click(within(history).getByRole('button', { name: 'Next move' }));
+    expect(screen.getByText('Viewing move 1 (White)')).toBeInTheDocument();
     fireEvent.click(within(history).getByRole('button', { name: 'Next move' }));
     expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6']));
     expect(screen.queryByText(/Viewing move/)).not.toBeInTheDocument();
@@ -887,6 +894,12 @@ describe('GameScreen history', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New move — Back to game' }));
     expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6', 'b2b3', 'g7g6']));
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    // Labels give the full-move number and the side that moved.
+    fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'h6' }));
+    expect(screen.getByText('Viewing move 1 (Black)')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Viewing move 1 (Black) of 2.');
+    fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'b3' }));
+    expect(screen.getByText('Viewing move 2 (White)')).toBeInTheDocument();
   });
 });
 

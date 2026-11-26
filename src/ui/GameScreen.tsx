@@ -6,7 +6,7 @@ import { attackMap } from '../coach/attacks';
 import { SUGGEST_LINES_OFF } from '../profile/attackLines';
 import type { Color } from '../types';
 import { CoachPanel } from './CoachPanel';
-import { HistoryBar, ViewingCard } from './HistoryBar';
+import { HistoryBar, ViewingCard, viewingLabel, viewingStatus } from './HistoryBar';
 import { WatchPlayer } from './WatchPlayer';
 import { MistakeCard } from './MistakeCard';
 import { PromotionPicker } from './PromotionPicker';
@@ -104,10 +104,10 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   const { game, phase, watching, viewPly } = view;
   const fen = game?.fen();
   const history = game?.history() ?? [];
-  const viewing = viewPly !== null && viewPly < history.length;
+  const viewing = viewPly !== null && viewPly >= -1 && viewPly < history.length && history.length > 0;
   const watchPly = watching ? watching.plies[watching.index] : null;
   // The position on the board: the watch player's ply, a past ply, or the live game.
-  const boardFen = watchPly?.fen ?? (viewing ? history[viewPly].fenAfter : fen);
+  const boardFen = watchPly?.fen ?? (viewing ? (viewPly < 0 ? history[0].fenBefore : history[viewPly].fenAfter) : fen);
   const live = !viewing && !watchPly;
   const canMove = live && phase === 'user' && !!game?.isUserTurn() && !view.promotion;
 
@@ -139,7 +139,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   const arrowNames = [...shownArrows.map((a) => a.color), ...deco.arrows.map(() => 'red')];
 
   const squareStyles: Record<string, CSSProperties> = {};
-  const last = watchPly ?? (viewing ? history[viewPly] : history.at(-1));
+  const last = watchPly ?? (viewing ? history[viewPly] : history.at(-1)); // none at the start
   if (last) {
     squareStyles[last.uci.slice(0, 2)] = LAST_MOVE;
     squareStyles[last.uci.slice(2, 4)] = LAST_MOVE;
@@ -202,12 +202,12 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
         />
       </div>
       {clockRow(userColor, 'You')}
-      {game && history.length > 1 && !watching && (
+      {game && history.length > 0 && !watching && (
         <HistoryBar plies={history.length} viewPly={viewing ? viewPly : null} onStep={actions.stepView} />
       )}
 
       <p className="status" role="status">
-        {viewing ? `Viewing move ${viewPly + 1} of ${history.length}.` : STATUS[phase]}
+        {viewing ? viewingStatus(history, viewPly) : STATUS[phase]}
       </p>
 
       {view.promotion && (
@@ -248,7 +248,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
       )}
 
       {viewing && (
-        <ViewingCard viewPly={viewPly} newMove={view.newMoveWhileViewing} onBack={() => actions.viewPly(null)} />
+        <ViewingCard label={viewingLabel(history, viewPly)} newMove={view.newMoveWhileViewing} onBack={() => actions.viewPly(null)} />
       )}
 
       {watching && (
