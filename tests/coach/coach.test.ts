@@ -487,6 +487,16 @@ describe('Coach post_move', () => {
     expect(explain).not.toHaveBeenCalled();
   });
 
+  it('a move missing from the multipv lines but within 20 cp (by its own search) is top', async () => {
+    const game = new GameState('w', KING_FEN);
+    const table = kingTable(game);
+    table[new GameState('w', KING_FEN).play('e1f2').fenAfter] = [line(['e8e7', 'f3d4'], -285)];
+    const coach = new Coach(makeDeps(new FakeEngine(table)));
+    const { message } = await coach.onUserMove(game, game.play('e1f2'));
+    expect(message?.kind).toBe('post_move');
+    expect(message?.topKind).toBe('top');
+  });
+
   it('explainTopMove shows the template, asks Claude once, and caches', async () => {
     const d = deferred<Explanation | null>();
     const explain = vi.fn((_p: FactPacket) => d.promise);

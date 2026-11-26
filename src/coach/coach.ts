@@ -203,7 +203,7 @@ export class Coach {
       if (!verdict.flagged) {
         // After-move feedback only where the coach still talks: full and guided.
         if (verdict.analysed === false || (level !== 'full' && level !== 'guided')) return { verdict, message: null };
-        return { verdict, message: this.postMove(verdict, move, topMoveKind(beforeAnalysis, move.uci, inBook), bookHit) };
+        return { verdict, message: this.postMove(verdict, move, topMoveKind(beforeAnalysis, move.uci, inBook, verdict), bookHit) };
       }
 
       const refutationUci = afterAnalysis.lines[0]?.uci.slice(0, 4) ?? [];

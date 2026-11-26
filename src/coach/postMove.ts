@@ -11,13 +11,21 @@ export type TopKind = 'book' | 'top' | null;
 /** The played move is "top" when the engine's best or within this many cp of it (side-to-move POV). */
 const TOP_WINDOW = 20;
 
-export function topMoveKind(before: Analysis, moveUci: string, inBook: boolean): TopKind {
+/**
+ * Book moves always count. Otherwise the gap to the best multipv line when the move is one of them,
+ * else the classifier's cpLoss (the move was searched on its own after it was played).
+ */
+export function topMoveKind(
+  before: Analysis, moveUci: string, inBook: boolean, verdict: Pick<Verdict, 'cpLoss' | 'analysed'>,
+): TopKind {
   if (inBook) return 'book';
+  if (verdict.analysed === false) return null;
   const lines = before.lines.filter((l) => l.uci.length > 0);
   if (lines.length === 0) return null;
   const best = Math.max(...lines.map(lineScore));
   const played = lines.find((l) => l.uci[0] === moveUci);
-  return played && best - lineScore(played) <= TOP_WINDOW ? 'top' : null;
+  const gap = played ? best - lineScore(played) : verdict.cpLoss;
+  return gap <= TOP_WINDOW ? 'top' : null;
 }
 
 export interface PostMoveContext {

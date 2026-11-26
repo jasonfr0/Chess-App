@@ -12,15 +12,29 @@ const an = (lines: { u: string; cp?: number; mate?: number }[]): Analysis => ({
 
 describe('topMoveKind', () => {
   const a = an([{ u: 'e2e4', cp: 50 }, { u: 'd2d4', cp: 35 }, { u: 'a2a3', cp: 25 }]);
-  it('top for lines[0]', () => expect(topMoveKind(a, 'e2e4', false)).toBe('top'));
-  it('top within 20 cp', () => expect(topMoveKind(a, 'd2d4', false)).toBe('top'));
-  it('null at 25 cp below', () => expect(topMoveKind(a, 'a2a3', false)).toBeNull());
-  it('null when absent', () => expect(topMoveKind(a, 'h2h3', false)).toBeNull());
-  it('book regardless', () => expect(topMoveKind(a, 'h2h3', true)).toBe('book'));
+  const v = (cpLoss: number) => ({ cpLoss });
+  it('top for lines[0]', () => expect(topMoveKind(a, 'e2e4', false, v(0))).toBe('top'));
+  it('top within 20 cp', () => expect(topMoveKind(a, 'd2d4', false, v(0))).toBe('top'));
+  it('null at 25 cp below', () => expect(topMoveKind(a, 'a2a3', false, v(0))).toBeNull());
+  it('null when absent and the verdict says it lost more than 20 cp', () =>
+    expect(topMoveKind(a, 'h2h3', false, v(80))).toBeNull());
+  it('book regardless', () => expect(topMoveKind(a, 'h2h3', true, v(500))).toBe('book'));
   it('handles mate lines', () => {
     const m = an([{ u: 'e2e4', mate: 2 }, { u: 'd2d4', cp: 900 }]);
-    expect(topMoveKind(m, 'd2d4', false)).toBeNull();
+    expect(topMoveKind(m, 'd2d4', false, v(0))).toBeNull();
   });
+  it('exactly 20 cp below best is top; 21 is not', () => {
+    const b = an([{ u: 'e2e4', cp: 50 }, { u: 'd2d4', cp: 30 }, { u: 'c2c4', cp: 29 }]);
+    expect(topMoveKind(b, 'd2d4', false, v(0))).toBe('top');
+    expect(topMoveKind(b, 'c2c4', false, v(0))).toBeNull();
+  });
+  it('a move missing from the multipv lines is top when the verdict puts it within 20 cp', () => {
+    expect(topMoveKind(a, 'g1f3', false, v(20))).toBe('top');
+    expect(topMoveKind(a, 'g1f3', false, v(5))).toBe('top');
+    expect(topMoveKind(a, 'g1f3', false, v(21))).toBeNull();
+  });
+  it('never top when the move could not be analysed', () =>
+    expect(topMoveKind(a, 'g1f3', false, { cpLoss: 0, analysed: false })).toBeNull());
 });
 
 function ctx(fen: string, san: string, over: Partial<PostMoveContext> = {}, v: Partial<Verdict> = {}): PostMoveContext {
@@ -47,6 +61,20 @@ describe('postMoveTemplate', () => {
     const t = postMoveTemplate(ctx('rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2', 'Nf3', { kind: 'top' }));
     expect(t.summary).toBe("✓ That's the top move. Do you see why it works?");
     expect(t.explanation.whatHappened).toMatch(/develops your knight/);
+  });
+  it('top reason for a capture', () => {
+    // 1.e4 d5: exd5 takes the pawn.
+    const t = postMoveTemplate(ctx('rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2', 'exd5', { kind: 'top' }));
+    expect(t.explanation.whatHappened).toBe('exd5 captures the pawn on d5.');
+  });
+  it('top reason for a check', () => {
+    const t = postMoveTemplate(ctx('4k3/8/8/8/8/8/8/R3K3 w - - 0 1', 'Ra8+', { kind: 'top' }));
+    expect(t.explanation.whatHappened).toBe('Ra8+ gives check.');
+  });
+  it('top reason for a defending move', () => {
+    // The black rook on e8 attacks the knight on e4; Rf4 guards it.
+    const t = postMoveTemplate(ctx('k3r3/8/8/8/4N3/8/5R2/K7 w - - 0 1', 'Rf4', { kind: 'top' }));
+    expect(t.explanation.whatHappened).toBe('Rf4 defends your knight on e4.');
   });
   it('top falls back to the engine line', () => {
     const t = postMoveTemplate(ctx(start, 'a3', { kind: 'top' }, { refutationSan: ['e5', 'Nf3'] }));
