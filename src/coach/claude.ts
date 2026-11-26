@@ -106,6 +106,12 @@ function allowedFrom(explicit: string[], t: Explanation): string[] {
   return [...set];
 }
 
+/**
+ * Only the opponent's reply from the engine line: refutationSan[1] is the user's own next engine move,
+ * which would be named during their next decision.
+ */
+const opponentReply = (refutationSan: string[]) => refutationSan.slice(0, 1);
+
 export function buildPacket(kind: 'post_move', ctx: PostMoveContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(kind: 'mistake', ctx: MistakeContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(
@@ -117,13 +123,14 @@ export function buildPacket(
   if (kind === 'post_move') {
     const c = ctx as PostMoveContext;
     const v = c.verdict;
+    const reply = opponentReply(v.refutationSan);
     const { hanging, forks, material, inCheck } = c.factsAfter;
     return {
       kind, fen: c.move.fenBefore, fenAfter: c.move.fenAfter, hanging, sanHistory: [c.move.san],
-      allowedMoves: allowedFrom([c.move.san, v.bestSan, ...v.refutationSan], t),
+      allowedMoves: allowedFrom([c.move.san, v.bestSan, ...reply], t),
       facts: {
         userMove: c.move.san, playedMoveIs: c.kind === 'book' ? 'book' : c.kind === 'top' ? 'top' : 'not_top',
-        bestMove: v.bestSan, refutation: v.refutationSan, cpLoss: v.cpLoss, area: v.area,
+        bestMove: v.bestSan, refutation: reply, cpLoss: v.cpLoss, area: v.area,
         bookIdea: c.bookIdea, bookLine: c.lineName,
         forksAfter: forks, materialAfter: material, inCheckAfter: inCheck,
       },
@@ -132,12 +139,13 @@ export function buildPacket(
   }
   const c = ctx as MistakeContext;
   const v = c.verdict;
+  const reply = opponentReply(v.refutationSan);
   const { hanging, forks, material, inCheck } = c.factsAfter;
   return {
     kind, fen: c.move.fenBefore, fenAfter: c.move.fenAfter, hanging, sanHistory: [c.move.san],
-    allowedMoves: allowedFrom([c.move.san, v.bestSan, ...v.refutationSan], t),
+    allowedMoves: allowedFrom([c.move.san, v.bestSan, ...reply], t),
     facts: {
-      userMove: c.move.san, bestMove: v.bestSan, refutation: v.refutationSan,
+      userMove: c.move.san, bestMove: v.bestSan, refutation: reply,
       severity: v.severity, cpLoss: v.cpLoss, area: v.area, theme: v.theme, themeCountBefore: c.themeCount,
       forksAfter: forks, materialAfter: material, inCheckAfter: inCheck,
     },
@@ -155,6 +163,7 @@ const SYSTEM_PROMPT = `You are a patient chess coach for a beginner rated about 
 
 Truth rule (strict):
 - Mention only moves listed in allowedMoves. Never calculate new lines or invent variations, and never contradict the facts.
+- Never suggest what the user should play next: the game goes on, and their next move is theirs to find.
 - Every claim about the position must come from the facts. Never claim a fork "wins" material; say it "attacks" the pieces.
 - "hanging" lists the pieces the opponent can win in "fenAfter" (the position after the user's move, for both post_move and mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
 - When you write "<piece> on <square>", that piece must stand on that square in "fen" or "fenAfter".

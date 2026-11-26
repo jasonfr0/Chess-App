@@ -152,6 +152,11 @@ describe('explainWithClaude claim checks', () => {
     await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
     expect(reqs[0].system[0].text).toContain('"free" only if its reason is "undefended"');
   });
+  it('tells Claude never to suggest what the user should play next', async () => {
+    const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
+    await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
+    expect(reqs[0].system[0].text).toContain('Never suggest what the user should play next');
+  });
   it('tells Claude which position "hanging" refers to for post_move and mistake packets', async () => {
     const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
     await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
@@ -213,7 +218,7 @@ describe('createExplainer', () => {
 });
 
 describe('buildPacket', () => {
-  it('allows the user move, best move and every refutation SAN', () => {
+  it('allows the user move, best move and only the opponent reply from the refutation', () => {
     const ctx = {
       verdict: { flagged: true, severity: 'blunder', cpLoss: 500, area: 'middlegame', theme: 'hanging_piece',
         recommendation: 'take_back', bestUci: 'g1f3', bestSan: 'Nf3', refutationSan: ['Qxh7#', 'Kf8'] },
@@ -222,7 +227,9 @@ describe('buildPacket', () => {
       themeCount: 2,
     } as unknown as MistakeContext;
     const p = buildPacket('mistake', ctx, { whatHappened: 'x' }, profile);
-    expect(p.allowedMoves).toEqual(expect.arrayContaining(['h6', 'Nf3', 'Qxh7#', 'Kf8']));
+    expect(p.allowedMoves).toEqual(expect.arrayContaining(['h6', 'Nf3', 'Qxh7#']));
+    expect(p.allowedMoves).not.toContain('Kf8');
+    expect(p.facts.refutation).toEqual(['Qxh7#']);
     expect(p.fen).toBe('f');
     expect(p.fenAfter).toBe('g');
     expect(p.hanging).toEqual([]);
@@ -247,6 +254,9 @@ describe('buildPacket post_move', () => {
     expect(p.fenAfter).toBe(c.fen());
     expect(p.fen).toBe(new Chess().fen());
     for (const s of ['a3', 'e4', 'e5']) expect(p.allowedMoves).toContain(s);
+    // refutationSan[1] is the user's own next engine move: never allowed, never in the facts.
+    expect(p.allowedMoves).not.toContain('Nf3');
+    expect(p.facts.refutation).toEqual(['e5']);
     expect(validateExplanation(t, p.allowedMoves)).toBe(true);
     expect(validateClaims(t, p)).toBe(true);
   });

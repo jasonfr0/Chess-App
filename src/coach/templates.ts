@@ -147,8 +147,8 @@ function loss(p: HangingPiece, viewer: Color): string {
 
 function whatHappenedMistake(ctx: MistakeContext): string {
   const { verdict, move } = ctx;
+  // Only the opponent's reply: the rest of the engine line is the user's own next moves.
   const [reply] = verdict.refutationSan;
-  const line = verdict.refutationSan.join(', ');
   if (!reply) return `After ${move.san}, the engine found a stronger plan for them.`;
   switch (verdict.theme) {
     case 'hanging_piece':
@@ -158,7 +158,7 @@ function whatHappenedMistake(ctx: MistakeContext): string {
         const lead = verdict.theme === 'hanging_piece'
           ? `After ${move.san}, ${describe(p, move.color)} ${loss(p, move.color)}.`
           : `${capitalise(describe(p, move.color))} was already under attack and ${move.san} did not save it.`;
-        return `${lead} They can play ${reply}, and the engine's line is ${line}.`;
+        return `${lead} They can play ${reply}.`;
       }
       break;
     }
@@ -172,7 +172,7 @@ function whatHappenedMistake(ctx: MistakeContext): string {
       break;
     }
   }
-  return `After ${move.san}, the engine's best answer for them is ${line}.`;
+  return `After ${move.san}, the engine's best answer for them is ${reply}.`;
 }
 
 export function mistakeTemplate(ctx: MistakeContext): Explanation {

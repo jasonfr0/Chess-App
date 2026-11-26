@@ -63,7 +63,7 @@ describe('mistakeTemplate wording', () => {
     // Ne5?? — nothing defends e5, and the d6 pawn takes it.
     const move = mk('4k3/8/3p4/8/8/5N2/8/4K3 w - - 0 1', 'f3e5');
     const e = explain(move, verdictFor('hanging_piece', 'e1e2', 'Ke2', ['dxe5']));
-    expect(e.whatHappened).toBe("After Ne5, your knight on e5 can be taken for free. They can play dxe5, and the engine's line is dxe5.");
+    expect(e.whatHappened).toBe("After Ne5, your knight on e5 can be taken for free. They can play dxe5.");
   });
 
   it('a defended piece attacked by a cheaper one "can be won", never "free"', () => {
@@ -72,14 +72,15 @@ describe('mistakeTemplate wording', () => {
     const e = explain(move, verdictFor('hanging_piece', 'e1e2', 'Ke2', ['cxb5', 'axb5']));
     expect(e.whatHappened).not.toMatch(/free/);
     expect(e.whatHappened).toBe(
-      "After Nb5, your knight on b5 can be won: their pawn on c6 can take it, and a pawn is worth less than a knight. They can play cxb5, and the engine's line is cxb5, axb5.");
+      "After Nb5, your knight on b5 can be won: their pawn on c6 can take it, and a pawn is worth less than a knight. They can play cxb5.");
+    expect(e.whatHappened).not.toContain('axb5');
   });
 
   it('ignored_threat starts with a capital letter', () => {
     // Black to move; the bishop on g5 already attacks the undefended knight on f6, and Kd8 does not help.
     const move = mk('4k3/8/5n2/6B1/8/8/8/4K3 b - - 1 1', 'e8d8');
     const e = explain(move, verdictFor('ignored_threat', 'f6d5', 'Nd5', ['Bxf6+']));
-    expect(e.whatHappened).toBe("Your knight on f6 was already under attack and Kd8 did not save it. They can play Bxf6+, and the engine's line is Bxf6+.");
+    expect(e.whatHappened).toBe("Your knight on f6 was already under attack and Kd8 did not save it. They can play Bxf6+.");
   });
 
   it('allowed_fork names the fork with "both" for exactly two targets', () => {
@@ -87,6 +88,17 @@ describe('mistakeTemplate wording', () => {
     const move = mk('7k/8/8/8/1n6/8/7P/R3K3 w - - 0 1', 'h2h3');
     const e = explain(move, verdictFor('allowed_fork', 'a1a4', 'Ra4', ['Nc2+']));
     expect(e.whatHappened).toBe('After h3, they can play Nc2+, and their knight on c2 attacks both your rook on a1 and your king on e1.');
+  });
+
+  it('shows only the opponent reply from the refutation, never the user follow-up moves', () => {
+    // a3 in the start position; the engine line continues with White's own next move.
+    const move = mk(new Chess().fen(), 'a2a3');
+    const e = explain(move, verdictFor('other', 'e2e4', 'e4', ['e5', 'Nf3', 'Nc6']));
+    expect(e.whatHappened).toBe("After a3, the engine's best answer for them is e5.");
+    for (const s of [e.whatHappened, e.better, e.lesson]) {
+      expect(s).not.toContain('Nf3');
+      expect(s).not.toContain('Nc6');
+    }
   });
 
   it('missed_fork describes the fork the better move made', () => {
