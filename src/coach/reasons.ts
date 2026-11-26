@@ -18,20 +18,24 @@ export interface Reasons {
   principle: string | null;
   fundamentals: Fundamental[];
   effect: string | null;
+  /** The move gives checkmate. */
+  checkmate?: boolean;
+  /** The piece a pawn promotes to. */
+  promotion?: 'q' | 'r' | 'b' | 'n';
 }
 
 /** Why each idea works, in one plain sentence for a beginner. */
 export const FUNDAMENTAL_WHY: Record<Fundamental, string> = {
   develops: 'Getting your knights and bishops out early puts more of your army into the fight.',
-  centre: 'Pieces and pawns in the middle of the board reach more squares and get in your opponent\'s way.',
+  centre: 'Pieces in the middle reach more squares, and pawns there take good squares away from your opponent.',
   king_safety: 'Castling moves your king away from the middle, where it is easiest to attack.',
   defends: 'A guarded piece can\'t be taken for free, because you can take back.',
   attacks: 'When you attack their pieces, they have to spend moves saving them instead of attacking you.',
   check_threat: 'Checks and threats force your opponent to answer them, so you decide what happens next.',
-  wins_material: 'Every piece you win is one less piece they can fight you with.',
-  trade_when_ahead: 'When you are ahead, every even trade makes your extra piece count for more.',
+  wins_material: 'Everything you win is one less thing they can fight you with.',
+  trade_when_ahead: 'When you are ahead, every even trade makes your extra material count for more.',
   passed_pawn: 'A pawn that no enemy pawn can stop may march all the way and become a new queen.',
-  king_activity: 'With fewer pieces left, your king is safe to come out and becomes a strong fighter.',
+  king_activity: 'With fewer pieces left, your king is usually safe to come out and becomes a strong fighter.',
 };
 
 /** The simple rule each fundamental follows, named in the explanation. */
@@ -182,9 +186,45 @@ function joinAnd(items: string[]): string {
 
 function amount(gain: number): string {
   const words: Record<number, string> = {
-    1: 'a pawn', 2: 'two pawns', 3: 'a piece', 4: 'a piece and a pawn', 5: 'a rook', 6: 'a rook and a pawn',
+    1: 'a pawn', 2: 'two pawns', 3: 'a piece', 4: 'more than a piece', 5: 'a rook', 6: 'more than a rook',
   };
   return words[gain] ?? (gain >= 8 ? 'a lot of material' : 'material');
+}
+
+/** Mover's pieces that the opponent could win (facts.ts hanging logic). */
+function hangingOf(fen: string, color: Color): PieceRef[] {
+  return positionFacts(fen).hanging.filter((p) => p.color === color);
+}
+
+/** Legal king moves for `color` in `c` (a copy with `color` to move). */
+function kingMoves(c: Chess | null, color: Color): number {
+  if (!c) return 0;
+  const king = c.board().flat().find((p) => p && p.type === 'k' && p.color === color);
+  return king ? c.moves({ square: king.square, verbose: true }).length : 0;
+}
+
+/**
+ * True when the king had no legal square before, has one after, and an enemy rook or queen can
+ * reach the king's rank right now (a back-rank mate threat). All checked with chess.js.
+ */
+function givesKingSquare(before: Chess, after: Chess, m: Move): boolean {
+  if (m.piece === 'k' || before.inCheck()) return false;
+  const king = after.board().flat().find((p) => p && p.type === 'k' && p.color === m.color);
+  if (!king) return false;
+  if (kingMoves(before, m.color) !== 0 || kingMoves(withTurn(after.fen(), m.color), m.color) === 0) return false;
+  return after.moves({ verbose: true }).some((x) => (x.piece === 'r' || x.piece === 'q') && x.to[1] === king.square[1]);
+}
+
+const PROMOTION_WHY: Record<'q' | 'r' | 'b' | 'n', string> = {
+  q: 'A new queen is the strongest piece on the board.',
+  r: 'A new rook is a strong extra piece on your side.',
+  b: 'A new bishop is an extra piece on your side.',
+  n: 'A new knight is an extra piece on your side.',
+};
+
+function ahead(gain: number): string {
+  const a = amount(gain);
+  return a === 'material' ? 'comes out ahead' : a === 'a lot of material' ? 'comes out well ahead' : `comes out ${a} ahead`;
 }
 
 const stripCheck = (san: string) => san.replace(/[+#]$/, '');
@@ -212,8 +252,10 @@ export function deriveReasons(
 
   if ((m.piece === 'n' || m.piece === 'b') && MINOR_HOME[color][m.from] === m.piece) found.add('develops');
 
-  const occupiesCentre = !castle && m.piece !== 'k' && CENTRE.includes(m.to);
-  const aimsAt = castle || m.piece === 'k' || occupiesCentre ? [] : CENTRE.filter(
+  // In the opening, only pawns and knights/bishops earn centre credit: an early queen or rook is no lesson.
+  const centreOk = !castle && m.piece !== 'k' && !(opts.area === 'opening' && (m.piece === 'q' || m.piece === 'r'));
+  const occupiesCentre = centreOk && CENTRE.includes(m.to);
+  const aimsAt = !centreOk || occupiesCentre ? [] : CENTRE.filter(
     (sq) => after.get(sq)?.color !== color &&
       after.attackers(sq, color).includes(m.to) && !before.attackers(sq, color).includes(m.from),
   );
@@ -224,9 +266,13 @@ export function deriveReasons(
   const defended = castle ? [] : newlyDefended(before, after, m);
   if (defended.length > 0) found.add('defends');
 
-  const attacked = castle ? [] : positionFacts(after.fen()).attackedBy(uci).filter(
-    (t) => t.piece !== 'k' && !before.attackers(t.square as Square, color).includes(m.from),
-  );
+  // Only targets that could be won: undefended, or worth more than the attacker. Undefended first, then by value.
+  const attackerValue = VALUE[m.promotion ?? m.piece];
+  const undefended = (t: PieceRef) => after.attackers(t.square as Square, t.color).length === 0;
+  const attacked = castle ? [] : positionFacts(after.fen()).attackedBy(uci)
+    .filter((t) => t.piece !== 'k' && !before.attackers(t.square as Square, color).includes(m.from))
+    .filter((t) => undefended(t) || VALUE[t.piece] > attackerValue)
+    .sort((a, b) => Number(undefended(b)) - Number(undefended(a)) || VALUE[b.piece] - VALUE[a.piece]);
   if (attacked.length > 0) found.add('attacks');
 
   const mateThreat = !mate && !check && hasMateInOne(withTurn(after.fen(), color)) && !hasMateInOne(before);
@@ -258,8 +304,8 @@ export function deriveReasons(
   else if (m.captured) {
     action = moveNote(fenBefore, m);
     if (gain !== null && gain >= VALUE[m.captured]) action += ' for free';
-    else if (gain !== null && gain > 0) consequences.push(`wins ${amount(gain)}`);
-  } else if (castle) action = 'castles, so your king gets out of the middle';
+    else if (gain !== null && gain > 0) consequences.push(ahead(gain));
+  } else if (castle) action = 'castles';
   else if (m.promotion) action = `turns your pawn into a ${NAMES[m.promotion]}`;
   else if (found.has('develops')) action = `brings your ${NAMES[m.piece]} out`;
   else if (found.has('king_activity')) action = 'brings your king toward the middle';
@@ -269,6 +315,14 @@ export function deriveReasons(
     if (check) consequences.push('gives check');
     if (mateThreat) consequences.push('threatens checkmate');
     if (!m.captured && gain !== null && gain > 0) consequences.push(`wins ${amount(gain)}`);
+    // A piece of ours that could be won before, and no longer can (moved away, guarded or freed).
+    const hangingAfter = hangingOf(after.fen(), color);
+    const saved = castle ? [] : hangingOf(fenBefore, color).filter((p) => {
+      const now = p.square === m.from ? m.to : p.square;
+      return !hangingAfter.some((q) => q.square === now) && !defended.some((d) => d.square === p.square);
+    });
+    if (saved.length > 0) consequences.push(`deals with the threat to your ${NAMES[saved[0].piece]} on ${saved[0].square}`);
+    if (givesKingSquare(before, after, m)) consequences.push('gives your king a safe square');
     if (defended.length > 0) consequences.push(`defends ${joinAnd(defended.slice(0, 2).map((p) => `your ${NAMES[p.piece]} on ${p.square}`))}`);
     if (attacked.length > 0) consequences.push(`attacks ${joinAnd(attacked.slice(0, 2).map((p) => `their ${NAMES[p.piece]} on ${p.square}`))}`);
     if (aimsAt.length > 0 && opts.area !== 'endgame') {
@@ -276,7 +330,9 @@ export function deriveReasons(
     }
   }
   const parts = (action ? [action, ...consequences.slice(0, 1)] : consequences.slice(0, 2));
-  const effect = parts.length > 0 ? parts.join(' and ') : null;
+  // One "and" per sentence: parts that already contain one are joined with a comma.
+  const effect = parts.length === 0 ? null
+    : parts.some((p) => p.includes(' and ')) ? parts.join(', ') : parts.join(' and ');
 
   const hit = opts.book && stripCheck(opts.book.node.san) === stripCheck(m.san) && opts.book.lineName
     ? { name: opts.book.lineName, idea: opts.book.node.idea }
@@ -285,21 +341,30 @@ export function deriveReasons(
   const main = fundamentals[0];
   const principle = !hit && opts.area === 'opening' && main && PRINCIPLE[main] ? PRINCIPLE[main]! : null;
 
-  return { opening: hit, principle, fundamentals, effect };
+  const out: Reasons = { opening: hit, principle, fundamentals, effect };
+  if (mate) out.checkmate = true;
+  if (m.promotion) out.promotion = m.promotion as Reasons['promotion'];
+  return out;
 }
 
 function firstSentence(text: string): string {
   return /^.*?[.!?](?=\s|$)/.exec(text.trim())?.[0] ?? text.trim();
 }
 
-/** At most 3 sentences: what it does here, then the opening or rule, then why that idea works. */
-export function reasonText(san: string, r: Reasons): string {
+/**
+ * At most 3 sentences: what it does here, then the opening or rule, then why that idea works.
+ * Null when no checked fact is available: callers then show no explanation rather than filler.
+ */
+export function reasonText(san: string, r: Reasons): string | null {
+  if (r.checkmate) return `${san} is checkmate. That ends the game: you win.`;
   const primary = r.fundamentals[0];
   const idea = r.opening ? firstSentence(r.opening.idea) : null;
+  if (!r.effect && !r.opening && !primary) return null;
   const out: string[] = [];
   if (r.effect) out.push(`${san} ${r.effect}.`);
   else if (r.opening) out.push(`${san} is part of the ${r.opening.name}.`);
-  else out.push(`${san} is a quiet move.`);
+  else out.push(`Here is the idea behind ${san}.`);
+  if (r.promotion) return [...out, PROMOTION_WHY[r.promotion]].join(' ');
 
   if (r.opening) out.push(r.effect ? `It's part of the ${r.opening.name}.` : idea!);
   else if (r.principle) out.push(`It follows a key opening rule: ${r.principle}.`);

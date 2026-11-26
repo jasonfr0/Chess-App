@@ -7,11 +7,14 @@ export const BANNED_TERMS: readonly string[] = [
   'pawn structure', 'space advantage', 'compensation', 'dynamic', 'static',
 ];
 
-const PATTERNS = BANNED_TERMS.map((term) => ({
-  term,
-  // Whole word or phrase (any whitespace between words); plurals count too.
-  re: new RegExp(`\\b${term.split(' ').join('\\s+')}(?:s|es)?\\b`, 'i'),
-}));
+/** Plurals that don't just add "s"/"es". */
+const IRREGULAR: Record<string, string> = { tempo: 'tempi' };
+
+const PATTERNS = BANNED_TERMS.map((term) => {
+  const forms = [term, IRREGULAR[term]].filter(Boolean).map((t) => t.split(' ').join('\\s+'));
+  // Whole word or phrase (any whitespace between words); plurals count too ("outposts", "tempi").
+  return { term, re: new RegExp(`\\b(?:${forms.join('|')})(?:s|es)?\\b`, 'i') };
+});
 
 /** The banned terms found in `text`, in list order. Empty means the text is clean. */
 export function findJargon(text: string): string[] {

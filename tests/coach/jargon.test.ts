@@ -23,5 +23,6 @@ describe('findJargon', () => {
     expect(findJargon('a quiet move')).toEqual([]);
     expect(findJargon('ecstatic, contemporary, outposted')).toEqual([]);
     expect(findJargon('two outposts')).toEqual(['outpost']);
+    expect(findJargon('it gains two tempi')).toEqual(['tempo']);
   });
 });
