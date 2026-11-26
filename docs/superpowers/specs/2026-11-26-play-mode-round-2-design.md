@@ -1,7 +1,7 @@
 # Play Mode Round 2: Level-Pitched Explanations, Board Aids, Spoiler-Free Mistakes — Design
 
 Date: 2026-11-26
-Status: draft, awaiting approval
+Status: approved
 Builds on, and stays bound by unless changed here:
 - `docs/superpowers/specs/2026-11-25-chess-coach-design.md`
 - `docs/superpowers/specs/2026-11-26-play-mode-socratic-coaching-design.md`
