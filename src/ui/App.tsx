@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Coach } from '../coach/coach';
 import { createExplainer } from '../coach/claude';
 import { createEngine, type Engine } from '../engine/engine';
-import { levelFor, summary } from '../profile/profile';
+import { RESET_NOTICE, levelFor, migrateProfile, summary } from '../profile/profile';
 import { openDb, type Db, type Settings } from '../storage/db';
 import type { ProfileData } from '../types';
 import { GameScreen } from './GameScreen';
@@ -40,6 +40,7 @@ export function App() {
   const [profile, setProfileState] = useState<ProfileData | null>(null);
   const [tab, setTab] = useState<Tab>('play');
   const [claudeFailed, setClaudeFailed] = useState(false);
+  const [resetNotice, setResetNotice] = useState(false);
 
   const settingsRef = useRef<Settings | null>(null);
   const profileRef = useRef<ProfileData | null>(null);
@@ -49,8 +50,14 @@ export function App() {
     let cancelled = false;
     (async () => {
       const db = await openDb();
-      const [s, p, games] = await Promise.all([db.getSettings(), db.getProfile(), db.listGames()]);
+      const [s, stored, games] = await Promise.all([db.getSettings(), db.getProfile(), db.listGames()]);
       if (cancelled) return;
+      // One-time level reset; saved at once so the notice shows only on this load.
+      const { profile: p, reset } = migrateProfile(stored);
+      if (reset) {
+        db.saveProfile(p).catch(() => {});
+        setResetNotice(true);
+      }
       settingsRef.current = s;
       profileRef.current = p;
       gamesCount.current = games.length;
@@ -103,6 +110,12 @@ export function App() {
       </nav>
       {/* The game stays mounted so its loop and clock survive tab switches. */}
       <div hidden={tab !== 'play'}>
+        {resetNotice && (
+          <p className="notice" role="note">
+            <span>{RESET_NOTICE}</span>
+            <button type="button" className="link" onClick={() => setResetNotice(false)}>Dismiss</button>
+          </p>
+        )}
         <GameScreen
           db={db} engine={engine} coach={coach} profile={profile} settings={settings}
           onProfile={onProfile} onSettings={onSettings} onGameListChanged={onGameListChanged} rng={rng} startFen={startFen}

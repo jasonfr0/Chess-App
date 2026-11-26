@@ -12,7 +12,8 @@ import type { Db, SavedGame, Settings } from '../storage/db';
 import type { Analysis, CoachLevel, Color, GameResult, ProfileData } from '../types';
 
 export type CoachApi = Pick<
-  Coach, 'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'hint' | 'playOn' | 'checkConsequence' | 'recap'
+  Coach,
+  'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'explainTopMove' | 'hint' | 'playOn' | 'checkConsequence' | 'recap'
 >;
 
 export interface GameDeps {
@@ -52,8 +53,14 @@ export interface GameView {
   recap: CoachMessage | null;
   levelNotes: string[];
   clockSuggestion: boolean;
-  /** Id of the coach message whose choices the user tapped to see (guided and below). */
-  choicesShownFor: string | null;
+  /** The post_move feedback on the user's latest move, kept until their next move. */
+  lastMove: CoachMessage | null;
+  /** Whether the "Your last move" section is expanded. */
+  lastMoveOpen: boolean;
+  /** FEN in which the user tapped "Show questions" (guided). */
+  questionsShownFor: string | null;
+  /** FEN in which the user used "Need a nudge?"; a move from that position is assisted. */
+  nudgeFor: string | null;
 }
 
 export interface GameActions {
@@ -68,8 +75,15 @@ export interface GameActions {
   resign(): void;
   newGame(): void;
   dismissClockSuggestion(): void;
-  /** Reveal the current message's choices (they are always visible at full). */
-  showChoices(): void;
+  /** Reveal the questions for this position (they are always visible at full). */
+  showQuestions(): void;
+  /** "Need a nudge?": reveals the nudge; the move played from this position is assisted. */
+  nudge(): void;
+  /** "Explain it" on a top or book move. */
+  explainLastMove(): void;
+  /** "Yes, I got it": collapses the last-move section. */
+  ackLastMove(): void;
+  toggleLastMove(): void;
   /** "Ask the coach": pre-move coaching on demand, at levels that stay quiet. */
   askCoach(): void;
 }
@@ -81,7 +95,7 @@ const CLOCK_TICK_MS = 200;
 const INITIAL: GameView = {
   phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null,
   promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false,
-  choicesShownFor: null,
+  lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null,
 };
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
@@ -106,15 +120,6 @@ export function levelAt(game: GameState, profile: ProfileData, settings: Pick<Se
   const history = game.history();
   const inBook = lookup(game.userColor, history.map((m) => m.san)) !== null;
   return levelFor(profile, settings, areaOf(game.fen(), history.length, inBook));
-}
-
-/** Moves the coach is showing for this position: the visible choices plus the green best-move arrow. */
-function shownMoves(message: CoachMessage | null, visible: boolean): string[] {
-  if (!message || !visible) return [];
-  return [
-    ...(message.explanation.candidates ?? []).map((c) => c.uci.slice(0, 4)),
-    ...message.arrows.filter((a) => a.color === 'green').map((a) => a.from + a.to),
-  ];
 }
 
 /** Score of the user's last five finished games: win 1, draw 0.5. */
@@ -242,7 +247,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const result = game.result();
     if (result) { void endGame(result); return; }
     const consequence = d.current.coach.checkConsequence(game);
-    set({ phase: 'user', ...(consequence ? { consequence } : {}) });
+    // A new position: the nudge and shown questions belonged to the last one.
+    set({ phase: 'user', nudgeFor: null, questionsShownFor: null, ...(consequence ? { consequence } : {}) });
     runPreMove(game);
   };
 
@@ -266,6 +272,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       set({ phase: 'mistake', mistake: res.message });
       return;
     }
+    if (res?.message?.kind === 'post_move') set({ lastMove: res.message, lastMoveOpen: true });
     void opponentTurn();
   };
 
@@ -300,11 +307,13 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     })();
   }, []);
 
-  // Upgrade the shown message when Claude's explanation arrives.
+  // Upgrade the shown message (analysis-backed questions, Explain, Claude's text). Each kind only
+  // ever replaces its own slot: a late post_move upgrade must not touch "Now", nor the reverse.
   useEffect(() => subscribe(deps.coach, (m) => {
     const v = view.current;
-    if (v.coachMsg?.id === m.id) set({ coachMsg: m });
-    if (v.mistake?.id === m.id) set({ mistake: m });
+    if (m.kind === 'pre_move' && v.coachMsg?.id === m.id) set({ coachMsg: m });
+    if (m.kind === 'post_move' && v.lastMove?.id === m.id) set({ lastMove: m });
+    if (m.kind === 'mistake' && v.mistake?.id === m.id) set({ mistake: m });
   }), [deps.coach]);
 
   // Clock: runs for the side to move; paused on the mistake card, before the game and after it.
@@ -353,19 +362,18 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
         set({ promotion: { from, to } });
         return false;
       }
-      const msg = v.coachMsg;
-      const visible = msg !== null &&
-        (levelAt(game, profile.current, settings.current) === 'full' || v.choicesShownFor === msg.id);
+      // Using the nudge in this position (kept across a take-back to it) is help.
+      const nudged = v.nudgeFor === game.fen();
       // Hint 3 names the move outright, so whatever is played after it is not found on one's own.
       // After a take-back the mistake card has already shown the better move (text and arrow),
       // so replaying exactly that move is not found on one's own either.
       const replaysShownBest = v.hints !== null && retryBest.current === uci.slice(0, 4);
-      const assisted = shownMoves(msg, visible).includes(uci.slice(0, 4)) ||
-        (v.hints?.length ?? 0) >= 3 || replaysShownBest;
+      const assisted = nudged || (v.hints?.length ?? 0) >= 3 || replaysShownBest;
       retryBest.current = null;
       let move;
       try { move = game.play(uci); } catch { return false; }
-      set({ phase: 'checking', coachMsg: null, consequence: null, hints: null, choicesShownFor: null });
+      // Only the latest move's feedback is kept: the previous one goes now.
+      set({ phase: 'checking', coachMsg: null, consequence: null, hints: null, lastMove: null, lastMoveOpen: false });
       save();
       void checkUserMove(game, move, assisted);
       return true;
@@ -417,10 +425,26 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
 
     dismissClockSuggestion() { set({ clockSuggestion: false }); },
 
-    showChoices() {
-      const msg = view.current.coachMsg;
-      if (msg) set({ choicesShownFor: msg.id });
+    showQuestions() {
+      const { game, coachMsg } = view.current;
+      if (game && coachMsg) set({ questionsShownFor: game.fen() });
     },
+
+    nudge() {
+      const { game, coachMsg, phase } = view.current;
+      if (game && phase === 'user' && coachMsg?.nudge) set({ nudgeFor: game.fen() });
+    },
+
+    explainLastMove() {
+      const m = view.current.lastMove;
+      if (!m) return;
+      set({ lastMoveOpen: true });
+      d.current.coach.explainTopMove(m.id).catch(ignore);
+    },
+
+    ackLastMove() { set({ lastMoveOpen: false }); },
+
+    toggleLastMove() { set({ lastMoveOpen: !view.current.lastMoveOpen }); },
 
     askCoach() {
       const { game, phase } = view.current;

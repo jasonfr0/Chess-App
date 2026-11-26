@@ -38,7 +38,6 @@ function explanationStrings(e: Explanation): string[] {
   const out = [e.whatHappened];
   if (e.better) out.push(e.better);
   if (e.lesson) out.push(e.lesson);
-  for (const c of e.candidates ?? []) out.push(c.san, c.note);
   return out;
 }
 
@@ -55,7 +54,6 @@ export function validateExplanation(e: Explanation, allowed: string[]): boolean 
       if (!isAllowedToken(t, ok)) return false;
     }
   }
-  for (const c of e.candidates ?? []) if (!ok.has(strip(c.san))) return false;
   return true;
 }
 
@@ -72,7 +70,6 @@ function boardOf(fen: string | undefined): Chess | null {
 /**
  * Squares and pieces in prose must match the packet (spec §8):
  * - "<piece> on <square>" needs that piece type on that square in `fen` or `fenAfter`
- *   (a candidate's note may also describe the position after that candidate);
  * - a sentence about one particular piece that calls it "hanging" must name a square from the
  *   hanging list, and "free"/"undefended" additionally need that piece's reason to be "undefended".
  * Sentences naming no piece or square (general habits) are not claims about the board.
@@ -81,22 +78,15 @@ export function validateClaims(
   e: Explanation, packet: Pick<FactPacket, 'fen' | 'fenAfter' | 'hanging'>,
 ): boolean {
   const boards = [packet.fen, packet.fenAfter].map(boardOf).filter((b): b is Chess => b !== null);
-  const afterCandidate = (san: string): Chess[] => {
-    const b = boardOf(packet.fen);
-    try { b?.move(san); return b ? [b] : []; } catch { return []; }
-  };
   const anyHanging = new Set(packet.hanging.map((h) => h.square));
   const freeHanging = new Set(packet.hanging.filter((h) => h.reason === 'undefended').map((h) => h.square));
 
-  const texts: { text: string; boards: Chess[] }[] = [e.whatHappened, e.better, e.lesson]
-    .filter((t): t is string => t !== undefined)
-    .map((text) => ({ text, boards }));
-  for (const c of e.candidates ?? []) texts.push({ text: c.note, boards: [...boards, ...afterCandidate(c.san)] });
+  const texts = [e.whatHappened, e.better, e.lesson].filter((t): t is string => t !== undefined);
 
-  for (const { text, boards: on } of texts) {
+  for (const text of texts) {
     for (const m of text.matchAll(PIECE_ON_RE)) {
       const type = PIECE_WORDS[m[1].toLowerCase()];
-      if (!on.some((b) => b.get(m[2].toLowerCase() as Square)?.type === type)) return false;
+      if (!boards.some((b) => b.get(m[2].toLowerCase() as Square)?.type === type)) return false;
     }
     for (const sentence of text.split(/(?<=[.!?;])\s+/)) {
       const free = /\b(free|undefended)\b/i.test(sentence);
@@ -112,7 +102,6 @@ export function validateClaims(
 
 function allowedFrom(explicit: string[], t: Explanation): string[] {
   const set = new Set<string>(explicit.filter(Boolean));
-  for (const c of t.candidates ?? []) set.add(c.san);
   for (const s of explanationStrings(t)) for (const tok of moveTokens(s)) set.add(tok);
   return [...set];
 }
@@ -156,12 +145,10 @@ export function buildPacket(
   };
 }
 
-const candidateSchema = z.object({ san: z.string(), uci: z.string(), note: z.string(), best: z.boolean() });
 const explanationSchema = z.object({
   whatHappened: z.string(),
   better: z.string().optional(),
   lesson: z.string().optional(),
-  candidates: z.array(candidateSchema).optional(),
 });
 
 const SYSTEM_PROMPT = `You are a patient chess coach for a beginner rated about 400. You receive a JSON fact packet and rewrite its "template" explanation in warmer, clearer words.
@@ -236,11 +223,8 @@ export async function explainWithClaude(
     if (!msg.parsed_output) return { ok: false, reason: 'invalid' };
     const out = msg.parsed_output as Explanation;
     if (!validateExplanation(out, packet.allowedMoves) || !validateClaims(out, packet)) return { ok: false, reason: 'invalid' };
-    // Only prose comes from Claude; the candidate list, uci and best flags are the engine's.
-    const tc = packet.template.candidates;
-    const candidates = tc?.map((c) => ({ ...c, note: out.candidates?.find((x) => x.san === c.san)?.note ?? c.note }));
-    const { candidates: _drop, ...rest } = out;
-    return { ok: true, explanation: candidates ? { ...rest, candidates } : rest };
+    const { whatHappened, better, lesson } = out; // prose fields only
+    return { ok: true, explanation: { whatHappened, ...(better !== undefined ? { better } : {}), ...(lesson !== undefined ? { lesson } : {}) } };
   } catch (e) {
     if (timedOut) return { ok: false, reason: 'timeout' };
     if (ctrl.signal.aborted) return aborted;

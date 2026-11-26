@@ -30,12 +30,22 @@ function formatClock(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function boardArrows(message: CoachMessage | null, includeBest: boolean): BoardArrow[] {
-  if (!message) return [];
-  return message.arrows
-    .filter((a) => includeBest || a.color !== 'green')
-    .map((a) => ({ startSquare: a.from, endSquare: a.to, color: ARROW_COLORS[a.color] }));
+/**
+ * The mistake card's arrows while it is open. Otherwise the blue arrow for their last move, plus the
+ * green "stronger option" arrow while "Your last move" is expanded and the board still shows the
+ * position right after the user's move: once it is the user's turn again no arrow may suggest a move.
+ */
+function coachArrows(
+  mistake: CoachMessage | null, now: CoachMessage | null, lastMove: CoachMessage | null, showBetter: boolean,
+): Arrow[] {
+  if (mistake) return mistake.arrows;
+  const blue = now?.arrows.filter((a) => a.color === 'blue') ?? [];
+  const green = showBetter && lastMove?.topKind === null ? lastMove.arrows.filter((a) => a.color === 'green') : [];
+  return [...blue, ...green];
 }
+
+const toBoard = (arrows: Arrow[]): BoardArrow[] =>
+  arrows.map((a) => ({ startSquare: a.from, endSquare: a.to, color: ARROW_COLORS[a.color] }));
 
 export function GameScreen({ coachOffline, ...deps }: Props) {
   const [view, actions] = useGame(deps);
@@ -51,10 +61,9 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   );
 
   const message = view.coachMsg;
-  const showChoices = message !== null && view.choicesShownFor === message.id;
-  const arrows = view.mistake
-    ? boardArrows(view.mistake, true)
-    : boardArrows(message, level === 'full' || showChoices);
+  const showBetter = view.lastMoveOpen && !!game && !game.isUserTurn() && phase !== 'over';
+  const shownArrows = coachArrows(view.mistake, message, view.lastMove, showBetter);
+  const arrows = toBoard(shownArrows);
 
   const squareStyles: Record<string, CSSProperties> = {};
   const last = history.at(-1);
@@ -96,7 +105,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   return (
     <div className="game">
       {clockRow(opponentColor, 'Opponent')}
-      <div className="board" data-fen={fen ?? ''}>
+      <div className="board" data-fen={fen ?? ''} data-arrows={shownArrows.map((a) => a.color).join(',')}>
         <Chessboard
           options={{
             id: 'game',
@@ -152,10 +161,17 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
       {game && phase !== 'over' && phase !== 'setup' && !view.mistake && (
         <CoachPanel
           message={message}
+          lastMove={view.lastMove}
+          lastMoveOpen={view.lastMoveOpen}
+          onToggleLastMove={actions.toggleLastMove}
+          onAck={actions.ackLastMove}
+          onExplain={actions.explainLastMove}
           consequence={view.consequence}
           level={level}
-          showChoices={showChoices}
-          onShowChoices={actions.showChoices}
+          questionsShown={!!fen && view.questionsShownFor === fen}
+          onShowQuestions={actions.showQuestions}
+          nudgeShown={!!fen && view.nudgeFor === fen}
+          onNudge={actions.nudge}
           offline={coachOffline}
           hints={view.hints}
           onHint={actions.nextHint}

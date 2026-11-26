@@ -3,12 +3,24 @@ import type { CoachMessage } from '../coach/coach';
 import type { CoachLevel } from '../types';
 
 interface Props {
+  /** Pre-move coaching for the position on the board ("Now"). */
   message: CoachMessage | null;
+  /** Feedback on the user's latest move ("Your last move"). */
+  lastMove: CoachMessage | null;
+  lastMoveOpen: boolean;
+  onToggleLastMove: () => void;
+  /** "Yes, I got it". */
+  onAck: () => void;
+  /** "Explain it". */
+  onExplain: () => void;
   consequence: CoachMessage | null;
   level: CoachLevel;
-  showChoices: boolean;
-  onShowChoices: () => void;
-  /** Shows the "coach offline" dot when the shown text is a template because Claude is unavailable. */
+  /** At guided the questions wait for "Show questions". */
+  questionsShown: boolean;
+  onShowQuestions: () => void;
+  nudgeShown: boolean;
+  onNudge: () => void;
+  /** Shows the "coach offline" dot when an after-move explanation is a template because Claude is unavailable. */
   offline: boolean;
   hints: string[] | null;
   onHint: () => void;
@@ -18,13 +30,29 @@ interface Props {
 
 const LEVEL_WORDS: Record<CoachLevel, string> = { full: 'Full', guided: 'Guided', light: 'Light', solo: 'Solo' };
 
-export function CoachPanel({ message, consequence, level, showChoices, onShowChoices, offline, hints, onHint, onAskCoach }: Props) {
+/** True when the shown after-move text is one Claude would write (book ideas never are). */
+function claudeEligible(m: CoachMessage | null): m is CoachMessage {
+  return m !== null && (m.topKind === null || (m.topKind === 'top' && m.explained === true));
+}
+
+function Explanation({ message }: { message: CoachMessage }) {
+  const { whatHappened, better, lesson } = message.explanation;
+  return (
+    <>
+      {whatHappened && <p>{whatHappened}</p>}
+      {better && <p>{better}</p>}
+      {lesson && <p className="muted">{lesson}</p>}
+    </>
+  );
+}
+
+export function CoachPanel(p: Props) {
+  const { message, lastMove, consequence, level, hints } = p;
   const [open, setOpen] = useState(true);
-  const [revealedFor, setRevealedFor] = useState<string | null>(null);
-  const shown = message ?? consequence;
-  const offlineDot = offline && shown !== null && shown.source === 'template';
-  const candidates = message?.explanation.candidates ?? [];
-  const choicesVisible = level === 'full' || showChoices;
+  const offlineDot = p.offline && claudeEligible(lastMove) && lastMove.source === 'template';
+  // Guided hides the questions until asked; light only has a message when the user asked the coach.
+  const questionsVisible = level !== 'guided' || p.questionsShown;
+  const questions = message?.questions ?? [];
 
   return (
     <section className="card coach" aria-label="Coach">
@@ -37,6 +65,27 @@ export function CoachPanel({ message, consequence, level, showChoices, onShowCho
       </button>
       {open && (
         <div className="coach-body">
+          {lastMove && (
+            <div className="last-move">
+              <button type="button" className="section-head" aria-expanded={p.lastMoveOpen} onClick={p.onToggleLastMove}>
+                <span>Your last move</span>
+                <span aria-hidden="true">{p.lastMoveOpen ? '▾' : '▸'}</span>
+              </button>
+              {p.lastMoveOpen && (
+                <div className="section-body">
+                  {lastMove.summary && <p className="summary">{lastMove.summary}</p>}
+                  {lastMove.topKind !== null && lastMove.explained === false ? (
+                    <div className="actions">
+                      <button type="button" onClick={p.onAck}>Yes, I got it</button>
+                      <button type="button" onClick={p.onExplain}>Explain it</button>
+                    </div>
+                  ) : (
+                    <Explanation message={lastMove} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {consequence && (
             <div className="consequence">
               <p>{consequence.explanation.whatHappened}</p>
@@ -49,39 +98,32 @@ export function CoachPanel({ message, consequence, level, showChoices, onShowCho
               <ol>{hints.map((h) => <li key={h}>{h}</li>)}</ol>
               <div className="hint-buttons">
                 {[1, 2, 3].map((step) => (
-                  <button key={step} type="button" disabled={hints.length !== step - 1} onClick={onHint}>
+                  <button key={step} type="button" disabled={hints.length !== step - 1} onClick={p.onHint}>
                     Hint {step}
                   </button>
                 ))}
               </div>
             </div>
           )}
-          {!message && level === 'light' && onAskCoach && (
-            <button type="button" onClick={onAskCoach}>Ask the coach</button>
+          {!message && level === 'light' && p.onAskCoach && (
+            <button type="button" onClick={p.onAskCoach}>Ask the coach</button>
           )}
           {message && (
-            <>
-              <p className="what">{message.explanation.whatHappened}</p>
-              {candidates.length > 0 && (choicesVisible ? (
-                <ul className="candidates">
-                  {candidates.map((c) => (
-                    <li key={c.uci}>
-                      <strong>{c.san}</strong>{c.best && <span className="best"> best</span>} — {c.note}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <button type="button" onClick={onShowChoices}>Show choices</button>
-              ))}
-              {message.blunderCheck && (
-                <div className="blunder-check">
-                  <p><strong>Blunder check:</strong> {message.blunderCheck.prompt}</p>
-                  {revealedFor === message.id
-                    ? <p className="answer">{message.blunderCheck.answer}</p>
-                    : <button type="button" onClick={() => setRevealedFor(message.id)}>Reveal answer</button>}
+            <div className="now">
+              {lastMove && <h3 className="section-title">Now</h3>}
+              {message.theirMove && <p className="what">{message.theirMove}</p>}
+              {questions.length > 0 && (questionsVisible ? (
+                <div className="questions">
+                  <h4>Think about</h4>
+                  <ul>{questions.map((q) => <li key={q}>{q}</li>)}</ul>
                 </div>
-              )}
-            </>
+              ) : (
+                <button type="button" onClick={p.onShowQuestions}>Show questions</button>
+              ))}
+              {message.nudge && (p.nudgeShown
+                ? <p className="nudge">{message.nudge}</p>
+                : <button type="button" className="link" onClick={p.onNudge}>Need a nudge?</button>)}
+            </div>
           )}
         </div>
       )}

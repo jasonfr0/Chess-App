@@ -4,6 +4,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
 import type { ChessboardOptions } from 'react-chessboard';
 import { GameScreen } from '../../src/ui/GameScreen';
+import { App } from '../../src/ui/App';
+import { RESET_NOTICE } from '../../src/profile/profile';
 import type { CoachApi } from '../../src/ui/useGame';
 import type { Engine } from '../../src/engine/engine';
 import type { Verdict } from '../../src/coach/classify';
@@ -18,6 +20,12 @@ vi.mock('react-chessboard', () => ({
     board.options = options;
     return <div data-testid="board" data-fen={String(options.position)} />;
   },
+}));
+
+vi.mock('../../src/engine/engine', () => ({
+  createEngine: () => ({
+    analyse: (fen: string) => Promise.resolve({ fen, depth: 1, lines: [] }), stop: () => {}, busy: () => false,
+  }),
 }));
 
 afterEach(cleanup);
@@ -49,11 +57,13 @@ class FakeEngine implements Engine {
   busy(): boolean { return this.held > 0; }
 }
 
+const okVerdict = (uci: string, san: string): Verdict => ({
+  flagged: false, severity: 'ok', cpLoss: 0, area: 'opening', theme: 'other', recommendation: 'play_on',
+  bestUci: uci, bestSan: san, refutationSan: [],
+});
+
 function fakeCoach(): CoachApi & { recap: ReturnType<typeof vi.fn> } {
-  const ok = (uci: string, san: string): Verdict => ({
-    flagged: false, severity: 'ok', cpLoss: 0, area: 'opening', theme: 'other', recommendation: 'play_on',
-    bestUci: uci, bestSan: san, refutationSan: [],
-  });
+  const ok = okVerdict;
   const recapMessage: CoachMessage = {
     id: 'recap', kind: 'recap', arrows: [], source: 'template',
     explanation: { whatHappened: 'No big mistakes this game.', better: 'Well played.', lesson: 'Keep checking.' },
@@ -63,6 +73,7 @@ function fakeCoach(): CoachApi & { recap: ReturnType<typeof vi.fn> } {
     cancelPending: vi.fn(),
     preMove: vi.fn(async () => null),
     onUserMove: vi.fn(async (_g, move) => ({ verdict: ok(move.uci, move.san), message: null })),
+    explainTopMove: vi.fn(async () => {}),
     hint: vi.fn(() => ''),
     playOn: vi.fn(),
     checkConsequence: vi.fn(() => null),
@@ -94,18 +105,25 @@ async function setup(startFen?: string, o: SetupOpts = {}) {
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-/** A pre-move message offering e4 (best, with its green arrow) and Nf3. */
-const choicesMessage = (): CoachMessage => ({
-  id: 'pre-1', kind: 'pre_move', source: 'template',
-  arrows: [{ from: 'e2', to: 'e4', color: 'green' }],
-  explanation: {
-    whatHappened: 'Start in the center.',
-    candidates: [
-      { san: 'e4', uci: 'e2e4', note: 'takes the center', best: true },
-      { san: 'Nf3', uci: 'g1f3', note: 'develops your knight', best: false },
-    ],
-  },
+let preId = 0;
+/** A pre-move message with questions and a nudge (a fresh id each time, like the real coach). */
+const nudgeMessage = (): CoachMessage => ({
+  id: `pre-${++preId}`, kind: 'pre_move', source: 'template', arrows: [{ from: 'e7', to: 'e5', color: 'blue' }],
+  explanation: { whatHappened: '' }, theirMove: null,
+  questions: ['What does their last move attack?', 'Which pieces have not moved yet?'],
+  nudge: 'Look at your pawn on e2.',
 });
+
+/** A "stronger option" post_move with its green arrow. */
+const strongerMessage = (v: Verdict): CoachMessage => ({
+  id: `post-${v.bestUci}`, kind: 'post_move', source: 'template', verdict: v,
+  arrows: [{ from: v.bestUci.slice(0, 2), to: v.bestUci.slice(2, 4), color: 'green' }],
+  summary: 'Your move: e4. A stronger option was d4.', topKind: null, explained: true,
+  explanation: { whatHappened: 'After e4, their best answer is e5.', better: 'd4 is better.' },
+});
+
+const ARROW_NAMES: Record<string, string> = { '#1f9d55': 'green', '#d9302c': 'red', '#2f6fd6': 'blue' };
+const arrowColors = () => (board.options?.arrows ?? []).map((a) => ARROW_NAMES[a.color] ?? a.color);
 
 const lastRecord = (onProfile: ReturnType<typeof vi.fn>) => {
   const p = onProfile.mock.calls.at(-1)![0] as ProfileData;
@@ -164,53 +182,149 @@ describe('GameScreen', () => {
     expect(onProfile).not.toHaveBeenCalled();
   });
 
-  it('records a move copied from the shown choices as assisted (full level)', async () => {
+  it('a move played after "Need a nudge?" is assisted', async () => {
     const coach = fakeCoach();
-    coach.preMove = vi.fn(async () => choicesMessage());
+    coach.preMove = vi.fn(async () => nudgeMessage());
     const { onProfile } = await setup(undefined, { coach });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
-    await screen.findByText(/takes the center/);
+    fireEvent.click(await screen.findByRole('button', { name: 'Need a nudge?' }));
+    expect(await screen.findByText('Look at your pawn on e2.')).toBeInTheDocument();
     drop('e2', 'e4');
     await waitFor(() => expect(onProfile).toHaveBeenCalled());
     expect(lastRecord(onProfile)).toMatchObject({ assisted: true, good: false });
   });
 
-  it('a move that was not among the shown choices is independent', async () => {
+  it('a move played without the nudge is independent', async () => {
     const coach = fakeCoach();
-    coach.preMove = vi.fn(async () => choicesMessage());
+    coach.preMove = vi.fn(async () => nudgeMessage());
     const { onProfile } = await setup(undefined, { coach });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
-    await screen.findByText(/takes the center/);
-    drop('d2', 'd4');
+    await screen.findByText('Think about');
+    drop('e2', 'e4');
     await waitFor(() => expect(onProfile).toHaveBeenCalled());
     expect(lastRecord(onProfile)).toMatchObject({ good: true });
     expect(lastRecord(onProfile)?.assisted).toBeUndefined();
   });
 
-  it('at guided, a choice counts as assisted only once Show choices was tapped', async () => {
-    const guided: ProfileData = { ...defaultProfile(), levels: { opening: 'guided', middlegame: 'full', endgame: 'light' } };
+  it('nudge, then a mistake, then a take-back and a retry from the same position: still assisted', async () => {
     const coach = fakeCoach();
-    coach.preMove = vi.fn(async () => choicesMessage());
-    const { onProfile } = await setup(undefined, { coach, profile: guided });
+    coach.preMove = vi.fn(async () => nudgeMessage());
+    const verdict: Verdict = { flagged: true, severity: 'blunder', cpLoss: 400, area: 'opening', theme: 'hanging_piece',
+      recommendation: 'take_back', bestUci: 'd2d4', bestSan: 'd4', refutationSan: [] };
+    const mistake: CoachMessage = { id: 'm1', kind: 'mistake', source: 'template', arrows: [], verdict,
+      explanation: { whatHappened: 'Bad.', better: 'The better move was d4.', lesson: 'Look first.' } };
+    const ok = coach.onUserMove;
+    coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
+    const { onProfile } = await setup(undefined, { coach });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
-    await screen.findByText('Start in the center.');
-    expect(screen.queryByText(/takes the center/)).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Need a nudge?' }));
     drop('e2', 'e4');
+    fireEvent.click(await screen.findByRole('button', { name: 'Take it back' }));
+    onProfile.mockClear();
+    drop('c2', 'c4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBe(true);
+  });
+
+  it('a new opponent move clears the nudge', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => nudgeMessage());
+    const { onProfile } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Need a nudge?' }));
+    drop('e2', 'e4');
+    await waitFor(() => expect(fen()).toContain(' w '));
+    expect(await screen.findByRole('button', { name: 'Need a nudge?' })).toBeInTheDocument();
+    expect(screen.queryByText('Look at your pawn on e2.')).not.toBeInTheDocument();
+    onProfile.mockClear();
+    drop('d2', 'd4');
     await waitFor(() => expect(onProfile).toHaveBeenCalled());
     expect(lastRecord(onProfile)?.assisted).toBeUndefined();
   });
 
-  it('at guided, tapping Show choices then playing one marks it assisted', async () => {
+  it('at guided, the questions wait for "Show questions"', async () => {
     const guided: ProfileData = { ...defaultProfile(), levels: { opening: 'guided', middlegame: 'full', endgame: 'light' } };
     const coach = fakeCoach();
-    coach.preMove = vi.fn(async () => choicesMessage());
-    const { onProfile } = await setup(undefined, { coach, profile: guided });
+    coach.preMove = vi.fn(async () => nudgeMessage());
+    await setup(undefined, { coach, profile: guided });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Show choices' }));
-    await screen.findByText(/takes the center/);
-    drop('g1', 'f3');
-    await waitFor(() => expect(onProfile).toHaveBeenCalled());
-    expect(lastRecord(onProfile)?.assisted).toBe(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Show questions' }));
+    expect(await screen.findByText('What does their last move attack?')).toBeInTheDocument();
+  });
+
+  it('the green "stronger option" arrow shows only until the opponent replies', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => nudgeMessage());
+    coach.onUserMove = vi.fn(async (_g, move) => {
+      const v = { ...okVerdict(move.uci, move.san), bestUci: 'd2d4', bestSan: 'd4' };
+      return { verdict: v, message: strongerMessage(v) };
+    });
+    const { engine } = await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByText('Think about');
+    engine.hold = true; // the opponent keeps thinking
+    drop('e2', 'e4');
+    expect(await screen.findByText('Your move: e4. A stronger option was d4.')).toBeInTheDocument();
+    await waitFor(() => expect(arrowColors()).toContain('green'));
+    fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+    expect(arrowColors()).not.toContain('green'); // collapsed: no arrow
+    fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+    expect(arrowColors()).toContain('green');
+    cleanup();
+
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByText('Think about');
+    drop('e2', 'e4');
+    await waitFor(() => expect(fen()).toContain(' w '));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    // The feedback stays, but during the user's next decision the board shows only the blue arrow.
+    expect(screen.getByText('Your move: e4. A stronger option was d4.')).toBeInTheDocument();
+    expect(arrowColors()).not.toContain('green');
+    expect(screen.getByTestId('board').closest('.board')).toHaveAttribute('data-arrows', 'blue');
+  });
+
+  it('Explain on a top move asks the coach, and the upgrade fills "Your last move" only', async () => {
+    const coach = fakeCoach();
+    let listener: (m: CoachMessage) => void = () => {};
+    coach.onUpdate = vi.fn((cb) => { listener = cb; });
+    coach.preMove = vi.fn(async () => nudgeMessage());
+    const top = (explained: boolean, text = 'e4 takes the centre.'): CoachMessage => ({
+      id: 'post-1', kind: 'post_move', source: 'template', arrows: [], verdict: okVerdict('e2e4', 'e4'),
+      summary: "✓ That's the top move. Do you see why it works?", topKind: 'top', explained,
+      explanation: { whatHappened: text },
+    });
+    coach.onUserMove = vi.fn(async (_g, move) => ({ verdict: okVerdict(move.uci, move.san), message: top(false) }));
+    coach.explainTopMove = vi.fn(async (id: string) => { listener({ ...top(true), id }); });
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByText('Think about');
+    drop('e2', 'e4');
+    fireEvent.click(await screen.findByRole('button', { name: 'Explain it' }));
+    expect(coach.explainTopMove).toHaveBeenCalledWith('post-1');
+    expect(await screen.findByText('e4 takes the centre.')).toBeInTheDocument();
+    act(() => listener({ ...top(true, 'Claude: e4 grabs the centre.'), source: 'claude' }));
+    expect(await screen.findByText('Claude: e4 grabs the centre.')).toBeInTheDocument();
+    expect(screen.getByText('Think about')).toBeInTheDocument(); // "Now" untouched
+    fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+    expect(screen.queryByText('Claude: e4 grabs the centre.')).not.toBeInTheDocument();
+  });
+
+  it('"Yes, I got it" collapses the last-move section', async () => {
+    const coach = fakeCoach();
+    coach.onUserMove = vi.fn(async (_g, move) => ({
+      verdict: okVerdict(move.uci, move.san),
+      message: { id: 'post-1', kind: 'post_move' as const, source: 'template' as const, arrows: [], verdict: okVerdict(move.uci, move.san),
+        summary: '✓ Book move. Do you see why?', topKind: 'book' as const, explained: false,
+        explanation: { whatHappened: 'Book idea.' } },
+    }));
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, I got it' }));
+    expect(screen.getByRole('button', { name: /Your last move/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('✓ Book move. Do you see why?')).not.toBeInTheDocument();
   });
 
   it('does not announce level changes or suggest the clock against manual overrides', async () => {
@@ -235,11 +349,11 @@ describe('GameScreen', () => {
   it('at light, "Ask the coach" asks for coaching on demand', async () => {
     const light: ProfileData = { ...defaultProfile(), levels: { opening: 'light', middlegame: 'light', endgame: 'light' } };
     const coach = fakeCoach();
-    coach.preMove = vi.fn(async (_g, o?: { force?: boolean }) => (o?.force ? choicesMessage() : null));
+    coach.preMove = vi.fn(async (_g, o?: { force?: boolean }) => (o?.force ? nudgeMessage() : null));
     await setup(undefined, { coach, profile: light });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Ask the coach' }));
-    expect(await screen.findByText('Start in the center.')).toBeInTheDocument();
+    expect(await screen.findByText('What does their last move attack?')).toBeInTheDocument();
     expect(coach.preMove).toHaveBeenLastCalledWith(expect.anything(), { force: true });
     expect(screen.queryByRole('button', { name: 'Ask the coach' })).not.toBeInTheDocument();
   });
@@ -353,5 +467,27 @@ describe('GameScreen', () => {
     drop('c2', 'c4');
     await waitFor(() => expect(onProfile).toHaveBeenCalled());
     expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+  });
+});
+
+describe('App', () => {
+  it('resets a v1 profile once, shows the notice until dismissed, and not again after a reload', async () => {
+    const db = await openDb();
+    const { version: _v, ...v1 } = defaultProfile();
+    await db.saveProfile({ ...v1, levels: { opening: 'solo', middlegame: 'light', endgame: 'solo' }, levelChangedAt: { opening: 3 } });
+
+    render(<App />);
+    expect(await screen.findByText(RESET_NOTICE)).toBeInTheDocument();
+    await waitFor(async () => expect((await db.getProfile()).version).toBe(2));
+    const saved = await db.getProfile();
+    expect(saved.levels).toEqual({ opening: 'full', middlegame: 'full', endgame: 'light' });
+    expect(saved.levelChangedAt).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(RESET_NOTICE)).not.toBeInTheDocument();
+    cleanup();
+
+    render(<App />); // a reload: the saved profile is already v2
+    await screen.findByRole('button', { name: 'White' });
+    expect(screen.queryByText(RESET_NOTICE)).not.toBeInTheDocument();
   });
 });

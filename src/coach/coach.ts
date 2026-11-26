@@ -23,8 +23,6 @@ export interface CoachMessage {
   id: string; kind: 'pre_move' | 'post_move' | 'mistake' | 'consequence' | 'recap' | 'level_change';
   explanation: Explanation; arrows: Arrow[]; source: 'template' | 'claude';
   verdict?: Verdict;
-  /** Unused since before-move questions replaced it; kept only until the UI drops it. */
-  blunderCheck?: { prompt: string; answer: string };
   /** pre_move: what their last move did (null on move 1 as White), questions, and an optional hint. None names a move. */
   questions?: string[]; nudge?: string | null; theirMove?: string | null;
   /**

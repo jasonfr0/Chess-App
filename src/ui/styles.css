@@ -96,12 +96,24 @@ label { font-weight: 600; display: block; }
 .coach .what { font-size: 16px; }
 .offline { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
 .offline .dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; display: inline-block; }
-.candidates { margin: 8px 0; padding-left: 20px; }
-.candidates li { margin: 4px 0; }
-.candidates .best { color: var(--good); font-weight: 700; font-size: 13px; }
-.blunder-check { margin-top: 8px; padding: 8px 10px; background: var(--warn-bg); border-left: 4px solid var(--warn-border); border-radius: 6px; }
-.blunder-check button { margin-top: 6px; }
-.blunder-check .answer { font-weight: 600; }
+.coach .section-head {
+  width: 100%; border: none; border-radius: 0; background: transparent; justify-content: space-between;
+  padding: 4px 0; min-height: 32px; font-size: 13px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--muted);
+}
+.coach .section-title { margin: 6px 0 2px; }
+.last-move { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 4px; }
+.last-move .summary { font-weight: 600; }
+.last-move .actions { margin-top: 6px; }
+.questions h4 { font-size: 15px; margin: 8px 0 2px; }
+.questions ul { margin: 2px 0 6px; padding-left: 20px; }
+.questions li { margin: 3px 0; }
+.nudge { padding: 6px 10px; background: var(--warn-bg); border-left: 4px solid var(--warn-border); border-radius: 6px; }
+.notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px;
+  padding: 6px 10px; font-size: 14px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px;
+}
+.notice button { flex: 0 0 auto; }
 .consequence { padding: 8px 10px; border-left: 4px solid var(--bad); margin-bottom: 8px; border-radius: 6px; background: var(--warn-bg); }
 .hints ol { margin: 6px 0; padding-left: 20px; }
 .hint-buttons { display: flex; gap: 6px; }

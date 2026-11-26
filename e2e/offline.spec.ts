@@ -16,11 +16,15 @@ test('works offline after the service worker has installed', async ({ page, cont
   await expect(page.getByRole('status').filter({ hasText: 'Your move.' })).toBeVisible();
   await expect(page.locator('.board')).toBeVisible();
 
-  await page.locator('.board [data-square="e2"]').click();
-  await page.locator('.board [data-square="e4"]').click();
+  // 1.a3 is not the top move (Node Stockfish: about 38 cp worse than d4, outside its top three) and
+  // not a mistake, so the coach explains the stronger option, which Claude would upgrade if reachable.
+  await page.locator('.board [data-square="a2"]').click();
+  await page.locator('.board [data-square="a3"]').click();
   await expect.poll(() => boardFen(page)).toContain(' b ');
   await expect.poll(() => boardFen(page), { timeout: 10_000 }).toContain(' w ');
 
-  await expect(page.locator('.coach .what')).not.toBeEmpty({ timeout: 20_000 });
+  await expect(page.locator('.coach .last-move')).toContainText('A stronger option was', { timeout: 20_000 });
   await expect(page.locator('.coach .offline')).toBeVisible();
+  // The user's turn again: the stronger move's green arrow is gone.
+  await expect.poll(() => page.locator('.board').getAttribute('data-arrows')).toMatch(/^(blue)?$/);
 });

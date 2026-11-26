@@ -71,21 +71,6 @@ describe('explainWithClaude', () => {
   });
 });
 
-describe('candidates', () => {
-  it('keeps san/uci/best from the template, only taking notes from Claude', async () => {
-    const template: Explanation = { whatHappened: 'x', candidates: [
-      { san: 'Nf3', uci: 'g1f3', note: 'develops', best: true }, { san: 'Nc3', uci: 'b1c3', note: 'solid', best: false }] };
-    const p: FactPacket = { ...packet, allowedMoves: ['Nf3', 'Nc3', 'Bc4'], template };
-    const claude: Explanation = { whatHappened: 'ok', candidates: [
-      { san: 'Nc3', uci: 'zzzz', note: 'nice', best: true }, { san: 'Nf3', uci: 'b1c3', note: 'good', best: false },
-      { san: 'Bc4', uci: 'f1c4', note: 'extra', best: true }] };
-    const { client } = fake({ stop_reason: 'end_turn', parsed_output: claude });
-    const out = await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' });
-    expect(out.ok && out.explanation.candidates).toEqual([
-      { san: 'Nf3', uci: 'g1f3', note: 'good', best: true }, { san: 'Nc3', uci: 'b1c3', note: 'nice', best: false }]);
-  });
-});
-
 describe('validateExplanation', () => {
   it('catches 0-0 castling, lowercase piece moves and promotions', () => {
     expect(validateExplanation({ whatHappened: 'try 0-0 now' }, [])).toBe(false);
@@ -102,11 +87,6 @@ describe('validateExplanation', () => {
   it('checks captures, castling and piece moves, ignoring check marks', () => {
     expect(validateExplanation({ whatHappened: 'exd5 then O-O' }, ['exd5'])).toBe(false);
     expect(validateExplanation({ whatHappened: 'Bxf7 works' }, ['Bxf7+'])).toBe(true);
-  });
-  it('validates candidate notes and sans', () => {
-    const e: Explanation = { whatHappened: 'ok', candidates: [{ san: 'Nf3', uci: 'g1f3', note: 'then Qxh7', best: true }] };
-    expect(validateExplanation(e, ['Nf3'])).toBe(false);
-    expect(validateExplanation({ ...e, candidates: [{ ...e.candidates![0], note: 'develops' }] }, ['Nf3'])).toBe(true);
   });
 });
 
@@ -143,10 +123,6 @@ describe('validateClaims', () => {
   it('lets general habits through when they name no piece or square', () => {
     expect(ok('After every move, ask: what is undefended?')).toBe(true);
     expect(validateClaims({ whatHappened: 'x', lesson: 'Left a piece hanging: check what is free.' }, p)).toBe(true);
-  });
-  it('checks candidate notes too', () => {
-    const e = { whatHappened: 'ok', candidates: [{ san: 'Ne5', uci: 'f3e5', note: 'hits the rook on e8', best: true }] };
-    expect(validateClaims(e, p)).toBe(false);
   });
 });
 

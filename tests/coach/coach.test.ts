@@ -315,8 +315,7 @@ describe('Coach.preMove', () => {
     expect(m?.theirMove).toBeNull();
     expect(m?.questions?.length).toBeGreaterThanOrEqual(2);
     expect(m?.arrows).toEqual([]);
-    expect(m?.blunderCheck).toBeUndefined();
-    expect(m?.explanation.candidates).toBeUndefined();
+    expect(Object.keys(m!.explanation)).toEqual(['whatHappened']);
     await flush();
     expect(explain).not.toHaveBeenCalled();
   });
@@ -341,7 +340,6 @@ describe('Coach.preMove', () => {
     expect(m?.theirMove).toContain('Their bishop now attacks your knight on f6');
     expect(m?.questions).toContain('One of your pieces is under attack and not safely protected. Can you find it?');
     expect(m?.nudge).toBe('Look at your knight on f6.');
-    expect(m?.blunderCheck).toBeUndefined();
     expect(engine.calls).toEqual([{ fen: BISHOP_FEN, multipv: 3, depth: 14 }]);
     await flush();
     expect(explain).not.toHaveBeenCalled();

@@ -5,14 +5,10 @@ import type { Verdict } from './classify';
 import { positionFacts } from './facts';
 import type { HangingPiece, PieceRef, PositionFacts } from './facts';
 
-/** Unused since the pre-move candidate list was removed; kept only until the UI drops it. */
-export interface Candidate { san: string; uci: string; note: string; best: boolean }
 export interface Explanation {
   whatHappened: string;
   better?: string;
   lesson?: string;
-  /** Unused (see Candidate). */
-  candidates?: Candidate[];
 }
 export interface MistakeContext {
   verdict: Verdict; move: PlayedMove; factsAfter: PositionFacts;
