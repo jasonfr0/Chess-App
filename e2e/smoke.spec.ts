@@ -55,7 +55,8 @@ test('plays a coached game, resumes after reload, fits a 360px screen', async ({
 
   // History: step back to move 1 (read-only, nothing from the live position), then back to the game.
   await page.getByRole('button', { name: 'Previous move' }).click();
-  await expect(page.getByText('Viewing move 1')).toBeVisible();
+  await expect(page.getByText('Viewing move 1', { exact: true })).toBeVisible();
+  await expect(page.locator('p.status')).toHaveText(/^Viewing move 1 of 2\.$/);
   await expect.poll(() => boardFen(page)).toContain(' b ');
   expect(await boardArrows(page)).toBe('');
   await expect(page.locator('.coach')).toHaveCount(0);

@@ -651,6 +651,20 @@ describe('GameScreen mistake flow', () => {
     expect(arrowColors()).not.toContain('green');
   });
 
+  it('Play on, the reply, then re-expanding the reveal: playing the move it names is assisted', async () => {
+    const { onProfile } = await blunderE4();
+    fireEvent.click(screen.getByRole('button', { name: 'Play on' }));
+    await waitFor(() => expect(fen()).toContain(' w '));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    expect(screen.getByRole('button', { name: /Your last move/ })).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+    expect(screen.getByText('The better move was d4.')).toBeInTheDocument();
+    onProfile.mockClear();
+    drop('d2', 'd4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBe(true);
+  });
+
   it('take-back takes the move off the saved counts, lines included', async () => {
     const { db } = await blunderE4({ settings: LINES_ON });
     await waitFor(async () => expect(await savedGame(db)).toMatchObject({ userMoves: 1, attackLinesMoves: 1 }));
@@ -685,11 +699,11 @@ describe('GameScreen mistake flow', () => {
       expect(fen()).toBe(WATCH[0].fen);
       expect(board.options!.allowDragging).toBe(false);
       expect(board.options!.arrows).toEqual([{ startSquare: 'h7', endSquare: 'h6', color: '#d9302c' }]);
-      fireEvent.click(screen.getByRole('button', { name: '▶' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next move in line' }));
       expect(fen()).toBe(WATCH[1].fen);
       expect(board.options!.arrows).toHaveLength(1);
       expect(board.options!.arrows![0]).toMatchObject({ startSquare: 'b2', endSquare: 'b3' });
-      fireEvent.click(screen.getByRole('button', { name: '◀' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Previous move in line' }));
       expect(fen()).toBe(WATCH[0].fen);
       fireEvent.click(screen.getByRole('button', { name: 'Back to the card' }));
       expect(fen()).toBe(AFTER_A3);
@@ -789,6 +803,25 @@ describe('GameScreen history', () => {
     expect(fen()).toBe(live);
     expect(arrowColors()).toContain('green');
     expect(onProfile).toHaveBeenCalledTimes(recorded); // viewing recorded nothing
+  });
+
+  it('a revealed nudge\'s ring does not show while viewing', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => ({ ...nudgeMessage(), nudgeHighlight: ['e2'] }));
+    const { engine } = await setup(undefined, { coach });
+    engine.replies.set(fenAfter(START, ['a2a3']), 'h7h6');
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('a2', 'a3');
+    await waitFor(() => expect(fen()).toBe(fenAfter(START, ['a2a3', 'h7h6'])));
+    fireEvent.click(await screen.findByRole('button', { name: 'Need a nudge?' }));
+    await waitFor(() => expect(marks()).toEqual(['e2:ring']));
+    fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'a3' }));
+    expect(marks()).toEqual([]);
+    expect(screen.getByRole('status')).toHaveTextContent('Viewing move 1 of 2.');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to game' }));
+    expect(marks()).toEqual(['e2:ring']);
+    expect(screen.getByRole('status')).toHaveTextContent('Your move.');
   });
 
   it('◀ ▶ step through the moves; the last step returns to the live game', async () => {
@@ -978,7 +1011,6 @@ describe('GameScreen board decorations', () => {
     drop('h5', 'f7');
     const recap = await screen.findByRole('region', { name: /game over/i });
     await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
-    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
   });
 
@@ -997,7 +1029,6 @@ describe('GameScreen board decorations', () => {
     drop('h5', 'f7');
     const recap = await screen.findByRole('region', { name: /game over/i });
     await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
-    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
   });
 
@@ -1014,7 +1045,7 @@ describe('GameScreen board decorations', () => {
   });
 
   it('a promotion is counted once', async () => {
-    await setup(undefined, {
+    const { db } = await setup(undefined, {
       prepare: async (db) => {
         await db.saveGame({ id: 'p1', startedAt: 1, userColor: 'w', verdicts: [], result: null, userMoves: 4, attackLinesMoves: 0,
           moves: ['a2a4', 'b7b5', 'a4b5', 'a7a6', 'b5a6', 'c8b7', 'a6b7', 'e7e6'] });
@@ -1024,7 +1055,6 @@ describe('GameScreen board decorations', () => {
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
     expect(drop('b7', 'a8')).toBe(false);
     fireEvent.click(await screen.findByRole('button', { name: 'Queen' }));
-    const db = await openDb(`game-screen-${n - 1}`);
     await waitFor(async () => expect(await db.getGame('p1')).toMatchObject({ userMoves: 5 }));
   });
 });

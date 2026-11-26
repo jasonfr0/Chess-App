@@ -206,7 +206,9 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
         <HistoryBar plies={history.length} viewPly={viewing ? viewPly : null} onStep={actions.stepView} />
       )}
 
-      <p className="status" role="status">{STATUS[phase]}</p>
+      <p className="status" role="status">
+        {viewing ? `Viewing move ${viewPly + 1} of ${history.length}.` : STATUS[phase]}
+      </p>
 
       {view.promotion && (
         <PromotionPicker color={userColor} onChoose={actions.choosePromotion} onCancel={actions.cancelPromotion} />

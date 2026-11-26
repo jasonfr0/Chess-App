@@ -598,8 +598,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     toggleLastMove() {
       const { lastMoveOpen, lastMove, game, phase } = view.current;
       const open = !lastMoveOpen;
-      // A reveal needs no accounting here: Show me already counts, and after Play on its position is gone.
-      const revealsBetter = open && lastMove?.topKind === null && !lastMove.reveal && phase === 'user' && !!game?.isUserTurn();
+      // Includes the Play-on reveal: it names a move the user could still play now.
+      const revealsBetter = open && lastMove?.topKind === null && phase === 'user' && !!game?.isUserTurn();
       set({ lastMoveOpen: open, ...(revealsBetter ? { betterShownFor: game!.fen() } : {}) });
     },
 
