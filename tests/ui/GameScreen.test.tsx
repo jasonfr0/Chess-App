@@ -3,7 +3,8 @@ import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
 import type { ChessboardOptions } from 'react-chessboard';
-import { GameScreen } from '../../src/ui/GameScreen';
+import { GameScreen, boardDecorations } from '../../src/ui/GameScreen';
+import { SUGGEST_LINES_OFF } from '../../src/profile/attackLines';
 import { App } from '../../src/ui/App';
 import { RESET_NOTICE } from '../../src/profile/profile';
 import type { CoachApi } from '../../src/ui/useGame';
@@ -75,6 +76,7 @@ function fakeCoach(): CoachApi & { recap: ReturnType<typeof vi.fn> } {
     onUserMove: vi.fn(async (_g, move) => ({ verdict: ok(move.uci, move.san), message: null })),
     explainTopMove: vi.fn(async () => {}),
     hint: vi.fn(() => ''),
+    hintStep: vi.fn(() => ({ text: '', highlight: [] as string[] })),
     playOn: vi.fn(),
     checkConsequence: vi.fn(() => null),
     recap: vi.fn(() => recapMessage),
@@ -124,6 +126,10 @@ const strongerMessage = (v: Verdict): CoachMessage => ({
 
 const ARROW_NAMES: Record<string, string> = { '#1f9d55': 'green', '#d9302c': 'red', '#2f6fd6': 'blue' };
 const arrowColors = () => (board.options?.arrows ?? []).map((a) => ARROW_NAMES[a.color] ?? a.color);
+
+/** The board's marked squares as "square:kind" (data-squares). */
+const marks = () => (screen.getByTestId('board').closest('.board')!.getAttribute('data-squares') ?? '').split(' ').filter(Boolean);
+const LINES_ON: Settings = { ...DEFAULT_SETTINGS, attackLines: true };
 
 const lastRecord = (onProfile: ReturnType<typeof vi.fn>) => {
   const p = onProfile.mock.calls.at(-1)![0] as ProfileData;
@@ -441,7 +447,7 @@ describe('GameScreen', () => {
     };
     const ok = coach.onUserMove;
     coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict: mistake.verdict!, message: mistake } : ok(g, move)));
-    coach.hint = vi.fn((step: 1 | 2 | 3) => `hint ${step}`);
+    coach.hintStep = vi.fn((step: 1 | 2) => ({ text: `hint ${step}`, highlight: step === 2 ? ['d2'] : [] }));
     const { engine } = await setup(undefined, { coach });
     fireEvent.click(await screen.findByRole('button', { name: 'White' }));
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
@@ -453,10 +459,13 @@ describe('GameScreen', () => {
     expect(await screen.findByText('Try again. Find a better move.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hint 1' }));
     expect(await screen.findByText('hint 1')).toBeInTheDocument();
+    expect(marks()).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: 'Hint 2' }));
     expect(await screen.findByText('hint 2')).toBeInTheDocument();
+    expect(marks()).toEqual(['d2:ring']);
     expect(board.options!.allowDragging).toBe(true);
     drop('d2', 'd4');
+    expect(marks()).toEqual([]); // the next move clears the ring
     await waitFor(() => expect(coach.onUserMove).toHaveBeenCalledTimes(2));
     expect(vi.mocked(coach.onUserMove).mock.calls[1][1].uci).toBe('d2d4');
     await waitFor(() => expect(engine.calls.some((c) => c.depth === 10)).toBe(true));
@@ -500,6 +509,7 @@ describe('GameScreen', () => {
       const ok = coach.onUserMove;
       coach.onUserMove = vi.fn(async (g, move) => (move.uci === 'e2e4' ? { verdict, message: mistake } : ok(g, move)));
       coach.hint = vi.fn((step: 1 | 2 | 3) => `hint ${step}`);
+      coach.hintStep = vi.fn((step: 1 | 2) => ({ text: `hint ${step}`, highlight: [] }));
       const { onProfile } = await setup(undefined, { coach });
       fireEvent.click(await screen.findByRole('button', { name: 'White' }));
       await waitFor(() => expect(board.options?.allowDragging).toBe(true));
@@ -533,6 +543,152 @@ describe('GameScreen', () => {
     drop('c2', 'c4');
     await waitFor(() => expect(onProfile).toHaveBeenCalled());
     expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+  });
+});
+
+describe('boardDecorations', () => {
+  const base = { userColor: 'w' as const, isUserTurn: true, viewing: false, watching: false, attackLines: false, rings: [] as string[] };
+  const kinds = (fen: string, o: Partial<typeof base> = {}) => {
+    const d = boardDecorations({ ...base, ...o, fen });
+    return { marks: d.marks, arrows: d.arrows, styles: d.squareStyles };
+  };
+
+  it('gives a checked king a red square on either side, live or not', () => {
+    const whiteInCheck = 'k7/8/8/8/8/8/8/K6r w - - 0 1';
+    const blackInCheck = 'k6R/8/8/8/8/8/8/K7 b - - 0 1';
+    expect(kinds(whiteInCheck).marks).toEqual(['a1:check']);
+    expect(kinds(blackInCheck, { isUserTurn: false }).marks).toEqual(['a8:check']);
+    expect(kinds(blackInCheck, { viewing: true }).marks).toEqual(['a8:check']);
+    expect(kinds(blackInCheck, { watching: true }).marks).toEqual(['a8:check']);
+    expect(kinds(whiteInCheck).styles.a1?.backgroundColor).toMatch(/rgba\(217, ?48, ?44/);
+    expect(kinds(START).marks).toEqual([]);
+  });
+
+  it('rings squares only outside history view and the watch player', () => {
+    expect(kinds(START, { rings: ['f6'] }).marks).toEqual(['f6:ring']);
+    expect(kinds(START, { rings: ['f6'] }).styles.f6?.boxShadow).toMatch(/inset/);
+    expect(kinds(START, { rings: ['f6'], viewing: true }).marks).toEqual([]);
+    expect(kinds(START, { rings: ['f6'], watching: true }).marks).toEqual([]);
+  });
+
+  it('draws attack lines in red only on the user\'s live turn', () => {
+    const fenE4D5 = 'rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2';
+    const on = kinds(fenE4D5, { attackLines: true });
+    expect(on.arrows).toEqual([{ startSquare: 'd5', endSquare: 'e4', color: '#d9302c' }]);
+    expect(on.marks).toContain('e4:attacked');
+    expect(on.marks).toContain('c4:attacked');
+    expect(on.marks).not.toContain('d4:attacked'); // pawn pushes do not attack
+    expect(on.styles.c4?.backgroundImage).toMatch(/rgba\(217, ?48, ?44, ?0\.\d+\)/);
+    for (const o of [{ isUserTurn: false }, { viewing: true }, { watching: true }, { attackLines: false }]) {
+      const off = kinds(fenE4D5, { attackLines: true, ...o });
+      expect(off.arrows).toEqual([]);
+      expect(off.marks.some((m) => m.endsWith(':attacked'))).toBe(false);
+    }
+  });
+});
+
+describe('GameScreen board decorations', () => {
+  it('marks the checked king on the user\'s turn and on the opponent\'s', async () => {
+    await setup('k7/8/8/8/8/8/8/K6r w - - 0 1');
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    expect(marks()).toContain('a1:check');
+    cleanup();
+
+    const { engine } = await setup('k7/8/8/8/8/8/8/K6R w - - 0 1');
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    engine.hold = true;
+    drop('h1', 'h8');
+    await waitFor(() => expect(engine.calls.some((c) => c.depth === 10)).toBe(true));
+    expect(marks()).toContain('a8:check');
+  });
+
+  it('rings the nudge\'s square once the nudge is revealed', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => ({ ...nudgeMessage(), nudge: 'Look at your knight on f6.', nudgeHighlight: ['f6'] }));
+    await setup('rnbqkb1r/pppppppp/5n2/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 1 1', { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'Black' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Need a nudge?' }));
+    await screen.findByText('Look at your knight on f6.');
+    expect(marks()).toEqual(['f6:ring']);
+  });
+
+  it('shows no ring before the nudge is revealed', async () => {
+    const coach = fakeCoach();
+    coach.preMove = vi.fn(async () => ({ ...nudgeMessage(), nudgeHighlight: ['e2'] }));
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await screen.findByRole('button', { name: 'Need a nudge?' });
+    expect(marks()).toEqual([]);
+  });
+
+  it('shows attack lines during the user\'s turn only', async () => {
+    const { engine } = await setup('rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2', { settings: LINES_ON });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    expect(arrowColors()).toEqual(['red']);
+    expect(screen.getByTestId('board').closest('.board')).toHaveAttribute('data-arrows', 'red');
+    expect(marks()).toContain('e4:attacked');
+    engine.hold = true;
+    drop('a2', 'a3');
+    await waitFor(() => expect(engine.calls.some((c) => c.depth === 10)).toBe(true));
+    expect(arrowColors()).toEqual([]);
+    expect(marks().some((m) => m.endsWith(':attacked'))).toBe(false);
+  });
+
+  it('a move played with attack lines on is assisted and counted in the saved game', async () => {
+    const { db, onProfile } = await setup(undefined, { settings: LINES_ON });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBe(true);
+    await waitFor(async () => {
+      const g = await db.getGame((await db.currentGameId())!);
+      expect(g).toMatchObject({ attackLinesMoves: 1, userMoves: 1 });
+    });
+  });
+
+  it('counts user moves without attack lines too', async () => {
+    const { db, onProfile } = await setup();
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+    await waitFor(async () => {
+      const g = await db.getGame((await db.currentGameId())!);
+      expect(g).toMatchObject({ attackLinesMoves: 0, userMoves: 1 });
+    });
+  });
+
+  it('suggests turning attack lines off after 3 qualifying games, until dismissed', async () => {
+    await setup('r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', {
+      settings: LINES_ON,
+      prepare: async (db) => {
+        for (let i = 1; i <= 3; i++) {
+          await db.saveGame({ id: `g${i}`, startedAt: i, userColor: 'w', moves: [], verdicts: [],
+            result: { winner: 'w', reason: 'checkmate' }, userMoves: 12, attackLinesMoves: 12 });
+        }
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('h5', 'f7');
+    expect(await screen.findByText(SUGGEST_LINES_OFF)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
+  });
+
+  it('does not suggest it with fewer qualifying games', async () => {
+    await setup('r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', { settings: LINES_ON });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('h5', 'f7');
+    const recap = await screen.findByRole('region', { name: /game over/i });
+    await waitFor(() => expect(recap).toHaveTextContent('No big mistakes this game.'));
+    expect(screen.queryByText(SUGGEST_LINES_OFF)).not.toBeInTheDocument();
   });
 });
 

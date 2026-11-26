@@ -140,6 +140,17 @@ export function SettingsScreen({ db, settings, profile, onSettings, onImported }
       </section>
 
       <section className="card">
+        <h2>Board aids</h2>
+        <label className="check-row">
+          <input
+            type="checkbox" checked={settings.attackLines}
+            onChange={(e) => update({ attackLines: e.target.checked })}
+          />
+          Show attack lines — moves made with this on count as helped
+        </label>
+      </section>
+
+      <section className="card">
         <h2>Backup</h2>
         <div className="actions">
           <button type="button" onClick={onExport}>Export backup</button>

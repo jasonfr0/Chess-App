@@ -25,3 +25,16 @@ describe('SettingsScreen export', () => {
     expect(revoke).toHaveBeenCalledWith('blob:backup');
   });
 });
+
+describe('SettingsScreen attack lines', () => {
+  it('shows the toggle with its label and saves attackLines', () => {
+    const onSettings = vi.fn();
+    render(
+      <SettingsScreen db={{} as Db} settings={DEFAULT_SETTINGS} profile={defaultProfile()} onSettings={onSettings} onImported={() => {}} />,
+    );
+    const box = screen.getByRole('checkbox', { name: 'Show attack lines — moves made with this on count as helped' });
+    expect(box).not.toBeChecked();
+    fireEvent.click(box);
+    expect(onSettings).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, attackLines: true });
+  });
+});

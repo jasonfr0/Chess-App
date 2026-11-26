@@ -147,3 +147,6 @@ label { font-weight: 600; display: block; }
 .row { display: flex; flex-direction: column; }
 .count { color: var(--muted); font-weight: 500; }
 .examples { list-style: none; padding: 0; margin: 6px 0 0; }
+.check-row { display: flex; gap: 8px; align-items: flex-start; }
+.check-row input { margin-top: 3px; }
+.lines-suggestion button { margin-top: 6px; }

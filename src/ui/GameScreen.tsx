@@ -1,6 +1,9 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Chessboard, type Arrow as BoardArrow } from 'react-chessboard';
+import { Chess } from 'chess.js';
 import type { Arrow, CoachMessage } from '../coach/coach';
+import { attackMap } from '../coach/attacks';
+import { SUGGEST_LINES_OFF } from '../profile/attackLines';
 import type { Color } from '../types';
 import { CoachPanel } from './CoachPanel';
 import { MistakeCard } from './MistakeCard';
@@ -15,9 +18,53 @@ interface Props extends GameDeps {
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const ARROW_COLORS: Record<Arrow['color'], string> = { green: '#1f9d55', red: '#d9302c', blue: '#2f6fd6' };
-const SELECTED: CSSProperties = { background: 'rgba(255, 213, 0, 0.55)' };
-const TARGET: CSSProperties = { background: 'radial-gradient(circle, rgba(0,0,0,0.3) 22%, transparent 24%)' };
-const LAST_MOVE: CSSProperties = { background: 'rgba(255, 213, 0, 0.3)' };
+const SELECTED: CSSProperties = { backgroundColor: 'rgba(255, 213, 0, 0.55)' };
+const TARGET: CSSProperties = { backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 22%, transparent 24%)' };
+const LAST_MOVE: CSSProperties = { backgroundColor: 'rgba(255, 213, 0, 0.3)' };
+const CHECK: CSSProperties = { backgroundColor: 'rgba(217, 48, 44, 0.75)' };
+const RING: CSSProperties = { boxShadow: 'inset 0 0 0 4px rgba(242, 194, 0, 0.95)' };
+/** Low opacity so pieces stay readable; an image layer so it sits over the last-move colour. */
+const ATTACKED: CSSProperties = { backgroundImage: 'linear-gradient(rgba(217, 48, 44, 0.2), rgba(217, 48, 44, 0.2))' };
+
+export type SquareMark = 'check' | 'ring' | 'attacked';
+
+/** Layers b over a: background images stack (b on top), everything else in b wins. */
+function layer(a: CSSProperties | undefined, b: CSSProperties): CSSProperties {
+  const images = [b.backgroundImage, a?.backgroundImage].filter(Boolean).join(', ');
+  return { ...a, ...b, ...(images ? { backgroundImage: images } : {}) };
+}
+
+/**
+ * Board aids derived from chess.js facts. Check: the checked king's square, always. Rings: only on the
+ * live board (not in history view or the watch player). Attack lines: only during the user's live
+ * decision, as a faint tint on every square the opponent attacks and a red arrow from each attacker to
+ * each user piece it hits. `marks` lists "square:kind" for tests (data-squares).
+ */
+export function boardDecorations(input: {
+  fen: string; userColor: Color; isUserTurn: boolean; viewing: boolean; watching: boolean;
+  attackLines: boolean; rings: string[];
+}): { squareStyles: Record<string, CSSProperties>; arrows: BoardArrow[]; marks: string[] } {
+  const { fen, userColor, isUserTurn, viewing, watching, attackLines, rings } = input;
+  const squareStyles: Record<string, CSSProperties> = {};
+  const marks: string[] = [];
+  const arrows: BoardArrow[] = [];
+  const mark = (sq: string, kind: SquareMark, style: CSSProperties) => {
+    squareStyles[sq] = layer(squareStyles[sq], style);
+    marks.push(`${sq}:${kind}`);
+  };
+  let chess: Chess | null = null;
+  try { chess = new Chess(fen); } catch { /* not a position: nothing to mark */ }
+  if (!chess) return { squareStyles, arrows, marks };
+  if (chess.isCheck()) for (const sq of chess.findPiece({ type: 'k', color: chess.turn() })) mark(sq, 'check', CHECK);
+  const live = !viewing && !watching;
+  if (live) for (const sq of new Set(rings)) mark(sq, 'ring', RING);
+  if (live && attackLines && isUserTurn) {
+    const attacks = attackMap(fen, userColor === 'w' ? 'b' : 'w');
+    for (const sq of attacks.squares) mark(sq, 'attacked', ATTACKED);
+    for (const l of attacks.lines) arrows.push({ startSquare: l.from, endSquare: l.to, color: ARROW_COLORS.red });
+  }
+  return { squareStyles, arrows, marks };
+}
 
 const STATUS: Record<Phase, string> = {
   loading: 'Loading…', setup: 'Choose your colour to start.', user: 'Your move.',
@@ -63,7 +110,16 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   const message = view.coachMsg;
   const showBetter = view.lastMoveOpen && !!game && !game.isUserTurn() && phase !== 'over';
   const shownArrows = coachArrows(view.mistake, message, view.lastMove, showBetter);
-  const arrows = toBoard(shownArrows);
+
+  // Rings: the revealed nudge's squares (its position only) and the latest revealed hint's.
+  const nudgeRings = fen && view.nudgeFor === fen && message?.nudge ? message.nudgeHighlight ?? [] : [];
+  const deco = boardDecorations({
+    fen: fen ?? START_FEN, userColor: game?.userColor ?? 'w', isUserTurn: phase === 'user' && !!game?.isUserTurn(),
+    viewing: false, watching: false, // history view and the watch player arrive later
+    attackLines: deps.settings.attackLines, rings: [...nudgeRings, ...view.hintHighlight],
+  });
+  const arrows = [...toBoard(shownArrows), ...deco.arrows];
+  const arrowNames = [...shownArrows.map((a) => a.color), ...deco.arrows.map(() => 'red')];
 
   const squareStyles: Record<string, CSSProperties> = {};
   const last = history.at(-1);
@@ -74,6 +130,10 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   if (selected && game && canMove) {
     squareStyles[selected] = SELECTED;
     for (const m of game.legalMovesFrom(selected)) squareStyles[m.slice(2, 4)] = TARGET;
+  }
+  // Selection targets stay on top of the attack tint; the check colour wins over the last-move colour.
+  for (const [sq, style] of Object.entries(deco.squareStyles)) {
+    squareStyles[sq] = squareStyles[sq] === TARGET ? layer(style, TARGET) : layer(squareStyles[sq], style);
   }
 
   const tryMove = (from: string, to: string): boolean => {
@@ -105,7 +165,9 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   return (
     <div className="game">
       {clockRow(opponentColor, 'Opponent')}
-      <div className="board" data-fen={fen ?? ''} data-arrows={shownArrows.map((a) => a.color).join(',')}>
+      <div className="board" data-fen={fen ?? ''} data-arrows={arrowNames.join(',')}
+        data-squares={deco.marks.join(' ')}
+      >
         <Chessboard
           options={{
             id: 'game',
@@ -154,6 +216,13 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
           }}
           onNewGame={actions.newGame}
         />
+      )}
+
+      {phase === 'over' && view.linesOffSuggestion && (
+        <p className="card lines-suggestion" role="note">
+          {SUGGEST_LINES_OFF}{' '}
+          <button type="button" onClick={actions.dismissLinesOffSuggestion}>Dismiss</button>
+        </p>
       )}
 
       {view.mistake && <MistakeCard message={view.mistake} onTakeBack={actions.takeBack} onPlayOn={actions.playOn} />}

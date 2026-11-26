@@ -8,12 +8,13 @@ import { areaOf } from '../coach/classify';
 import { lookup } from '../openings/repertoire';
 import { levelFor, recordMove } from '../profile/profile';
 import { levelChangeText, reviewLevels, suggestClock } from '../profile/weaning';
+import { suggestLinesOff } from '../profile/attackLines';
 import type { Db, SavedGame, Settings } from '../storage/db';
 import type { Analysis, CoachLevel, Color, GameResult, ProfileData } from '../types';
 
 export type CoachApi = Pick<
   Coach,
-  'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'explainTopMove' | 'hint' | 'playOn' | 'checkConsequence' | 'recap'
+  'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'explainTopMove' | 'hint' | 'hintStep' | 'playOn' | 'checkConsequence' | 'recap'
 >;
 
 export interface GameDeps {
@@ -47,12 +48,16 @@ export interface GameView {
   mistake: CoachMessage | null;
   /** Set after a take-back: the hint texts revealed so far (up to three). */
   hints: string[] | null;
+  /** The squares the latest revealed hint rings ([] when it names none); cleared by the next move or take-back. */
+  hintHighlight: string[];
   promotion: { from: string; to: string } | null;
   clock: Record<Color, number> | null; // ms remaining
   result: GameResult | null;
   recap: CoachMessage | null;
   levelNotes: string[];
   clockSuggestion: boolean;
+  /** Game end: the last games qualify for "try turning attack lines off". */
+  linesOffSuggestion: boolean;
   /** The post_move feedback on the user's latest move, kept until their next move. */
   lastMove: CoachMessage | null;
   /** Whether the "Your last move" section is expanded. */
@@ -80,6 +85,7 @@ export interface GameActions {
   resign(): void;
   newGame(): void;
   dismissClockSuggestion(): void;
+  dismissLinesOffSuggestion(): void;
   /** Reveal the questions for this position (they are always visible at full). */
   showQuestions(): void;
   /** "Need a nudge?": reveals the nudge; the move played from this position is assisted. */
@@ -98,8 +104,8 @@ const BOOK_CHANCE = 0.7;
 const CLOCK_TICK_MS = 200;
 
 const INITIAL: GameView = {
-  phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null,
-  promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false,
+  phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null, hintHighlight: [],
+  promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false, linesOffSuggestion: false,
   lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null, betterShownFor: null,
 };
 
@@ -157,7 +163,10 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   if (deps.settings !== seen.current.settings) { seen.current.settings = deps.settings; settings.current = deps.settings; }
 
   const gen = useRef(0); // bumped whenever in-flight work must be dropped
-  const meta = useRef<{ id: string; startedAt: number; verdicts: Verdict[] }>({ id: '', startedAt: 0, verdicts: [] });
+  /** Per game: user moves played, how many of them with attack lines on, and whether the latest one was. */
+  const meta = useRef<{ id: string; startedAt: number; verdicts: Verdict[]; userMoves: number; attackLinesMoves: number; lastWithLines: boolean }>(
+    { id: '', startedAt: 0, verdicts: [], userMoves: 0, attackLinesMoves: 0, lastWithLines: false },
+  );
 
   const setProfile = (p: ProfileData) => { profile.current = p; d.current.onProfile(p); };
   const setSettings = (s: Settings) => { settings.current = s; d.current.onSettings(s); };
@@ -165,10 +174,10 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   const save = () => {
     const game = view.current.game;
     if (!game || d.current.startFen) return;
-    const { id, startedAt, verdicts } = meta.current;
+    const { id, startedAt, verdicts, userMoves, attackLinesMoves } = meta.current;
     const record: SavedGame = {
       id, startedAt, userColor: game.userColor, moves: game.toJSON().moves, verdicts: [...verdicts],
-      result: view.current.result,
+      result: view.current.result, userMoves, attackLinesMoves,
     };
     d.current.db.saveGame(record).catch(ignore);
   };
@@ -194,7 +203,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     if (!game || view.current.phase === 'over') return;
     gen.current++;
     d.current.coach.cancelPending();
-    set({ phase: 'over', result, promotion: null, mistake: null, hints: null });
+    set({ phase: 'over', result, promotion: null, mistake: null, hints: null, hintHighlight: [] });
     save();
     const { db, coach, startFen } = d.current;
     if (!startFen) await db.setCurrentGame(null).catch(ignore);
@@ -215,6 +224,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       recap,
       levelNotes: review.changes.filter((c) => levelOverride[c.area] === undefined).map(levelChangeText),
       clockSuggestion: suggestClock(review.profile, settings.current) && !settings.current.clockMinutes,
+      linesOffSuggestion: suggestLinesOff(games),
     });
   };
 
@@ -286,8 +296,11 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     void opponentTurn();
   };
 
-  const load = (game: GameState, id: string, startedAt: number, verdicts: Verdict[]) => {
-    meta.current = { id, startedAt, verdicts: [...verdicts] };
+  const load = (game: GameState, id: string, startedAt: number, verdicts: Verdict[], counts?: Pick<SavedGame, 'userMoves' | 'attackLinesMoves'>) => {
+    meta.current = {
+      id, startedAt, verdicts: [...verdicts],
+      userMoves: counts?.userMoves ?? 0, attackLinesMoves: counts?.attackLinesMoves ?? 0, lastWithLines: false,
+    };
     const minutes = settings.current.clockMinutes;
     set({
       ...INITIAL, phase: 'loading', game,
@@ -308,7 +321,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
           const id = await db.currentGameId();
           const saved = id ? await db.getGame(id) : undefined;
           if (saved && saved.result === null) {
-            load(new GameState(saved.userColor, undefined, saved.moves), saved.id, saved.startedAt, saved.verdicts);
+            load(new GameState(saved.userColor, undefined, saved.moves), saved.id, saved.startedAt, saved.verdicts, saved);
             return;
           }
         } catch { /* unreadable save: start fresh */ }
@@ -380,12 +393,19 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const replaysShownBest = v.hints !== null && retryBest.current === uci.slice(0, 4);
       // The re-expanded "stronger option" named this move during the decision.
       const playsShownBetter = v.betterShownFor === game.fen() && v.lastMove?.verdict?.bestUci.slice(0, 4) === uci.slice(0, 4);
-      const assisted = nudged || (v.hints?.length ?? 0) >= 3 || replaysShownBest || playsShownBetter;
+      // Attack lines show the opponent's threats during the decision: such a move is helped.
+      const withLines = settings.current.attackLines;
+      const assisted = nudged || (v.hints?.length ?? 0) >= 3 || replaysShownBest || playsShownBetter || withLines;
       retryBest.current = null;
       let move;
       try { move = game.play(uci); } catch { return false; }
+      meta.current.userMoves++;
+      if (withLines) meta.current.attackLinesMoves++;
+      meta.current.lastWithLines = withLines;
       // Only the latest move's feedback is kept: the previous one goes now.
-      set({ phase: 'checking', coachMsg: null, consequence: null, hints: null, lastMove: null, lastMoveOpen: false });
+      set({
+        phase: 'checking', coachMsg: null, consequence: null, hints: null, hintHighlight: [], lastMove: null, lastMoveOpen: false,
+      });
       save();
       void checkUserMove(game, move, assisted);
       return true;
@@ -406,8 +426,12 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       stopWork();
       retryBest.current = view.current.mistake?.verdict?.bestUci.slice(0, 4) ?? null;
       game.takeBackUserMove();
+      // The taken-back move no longer counts toward this game's moves.
+      meta.current.userMoves = Math.max(0, meta.current.userMoves - 1);
+      if (meta.current.lastWithLines) meta.current.attackLinesMoves = Math.max(0, meta.current.attackLinesMoves - 1);
+      meta.current.lastWithLines = false;
       save();
-      set({ phase: 'user', mistake: null, hints: [] });
+      set({ phase: 'user', mistake: null, hints: [], hintHighlight: [] });
     },
 
     playOn() {
@@ -420,8 +444,14 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     nextHint() {
       const hints = view.current.hints;
       if (!hints || hints.length >= 3) return;
-      const text = d.current.coach.hint((hints.length + 1) as 1 | 2 | 3);
-      if (text) set({ hints: [...hints, text] });
+      const step = (hints.length + 1) as 1 | 2 | 3;
+      if (step === 3) {
+        const text = d.current.coach.hint(3);
+        if (text) set({ hints: [...hints, text] });
+        return;
+      }
+      const { text, highlight } = d.current.coach.hintStep(step);
+      if (text) set({ hints: [...hints, text], hintHighlight: highlight });
     },
 
     resign() {
@@ -436,6 +466,8 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     },
 
     dismissClockSuggestion() { set({ clockSuggestion: false }); },
+
+    dismissLinesOffSuggestion() { set({ linesOffSuggestion: false }); },
 
     showQuestions() {
       const { game, coachMsg } = view.current;
