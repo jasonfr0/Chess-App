@@ -23,8 +23,15 @@ test('works offline after the service worker has installed', async ({ page, cont
   await expect.poll(() => boardFen(page)).toContain(' b ');
   await expect.poll(() => boardFen(page), { timeout: 10_000 }).toContain(' w ');
 
-  await expect(page.locator('.coach .last-move')).toContainText('A stronger option was', { timeout: 20_000 });
+  // The user's turn again: the "stronger option" feedback folds away so it names no move during
+  // this decision, and the stronger move's green arrow is gone.
+  const head = page.locator('.coach .last-move').getByRole('button', { name: /Your last move/ });
+  await expect(head).toHaveAttribute('aria-expanded', 'false', { timeout: 20_000 });
+  await expect(page.locator('.coach .last-move')).not.toContainText('A stronger option was');
   await expect(page.locator('.coach .offline')).toBeVisible();
-  // The user's turn again: the stronger move's green arrow is gone.
+  await expect.poll(() => page.locator('.board').getAttribute('data-arrows')).toMatch(/^(blue)?$/);
+  // Re-expanding shows it again (a move it names then counts as helped), still without the arrow.
+  await head.click();
+  await expect(page.locator('.coach .last-move')).toContainText('A stronger option was');
   await expect.poll(() => page.locator('.board').getAttribute('data-arrows')).toMatch(/^(blue)?$/);
 });

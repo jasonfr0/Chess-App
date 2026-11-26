@@ -61,6 +61,11 @@ export interface GameView {
   questionsShownFor: string | null;
   /** FEN in which the user used "Need a nudge?"; a move from that position is assisted. */
   nudgeFor: string | null;
+  /**
+   * FEN in which the user re-expanded a "stronger option" feedback during their own decision: it names
+   * a better move, so playing that move from this position is assisted.
+   */
+  betterShownFor: string | null;
 }
 
 export interface GameActions {
@@ -95,7 +100,7 @@ const CLOCK_TICK_MS = 200;
 const INITIAL: GameView = {
   phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null,
   promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false,
-  lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null,
+  lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null, betterShownFor: null,
 };
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
@@ -247,8 +252,13 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const result = game.result();
     if (result) { void endGame(result); return; }
     const consequence = d.current.coach.checkConsequence(game);
-    // A new position: the nudge and shown questions belonged to the last one.
-    set({ phase: 'user', nudgeFor: null, questionsShownFor: null, ...(consequence ? { consequence } : {}) });
+    // A new position: the nudge and shown questions belonged to the last one. A "stronger option"
+    // names a move the user may still play, so it folds away for their decision (top/book stay).
+    const foldBetter = view.current.lastMove?.topKind === null;
+    set({
+      phase: 'user', nudgeFor: null, questionsShownFor: null, betterShownFor: null,
+      ...(foldBetter ? { lastMoveOpen: false } : {}), ...(consequence ? { consequence } : {}),
+    });
     runPreMove(game);
   };
 
@@ -368,7 +378,9 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       // After a take-back the mistake card has already shown the better move (text and arrow),
       // so replaying exactly that move is not found on one's own either.
       const replaysShownBest = v.hints !== null && retryBest.current === uci.slice(0, 4);
-      const assisted = nudged || (v.hints?.length ?? 0) >= 3 || replaysShownBest;
+      // The re-expanded "stronger option" named this move during the decision.
+      const playsShownBetter = v.betterShownFor === game.fen() && v.lastMove?.verdict?.bestUci.slice(0, 4) === uci.slice(0, 4);
+      const assisted = nudged || (v.hints?.length ?? 0) >= 3 || replaysShownBest || playsShownBetter;
       retryBest.current = null;
       let move;
       try { move = game.play(uci); } catch { return false; }
@@ -444,7 +456,12 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
 
     ackLastMove() { set({ lastMoveOpen: false }); },
 
-    toggleLastMove() { set({ lastMoveOpen: !view.current.lastMoveOpen }); },
+    toggleLastMove() {
+      const { lastMoveOpen, lastMove, game, phase } = view.current;
+      const open = !lastMoveOpen;
+      const revealsBetter = open && lastMove?.topKind === null && phase === 'user' && !!game?.isUserTurn();
+      set({ lastMoveOpen: open, ...(revealsBetter ? { betterShownFor: game!.fen() } : {}) });
+    },
 
     askCoach() {
       const { game, phase } = view.current;

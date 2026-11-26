@@ -278,10 +278,76 @@ describe('GameScreen', () => {
     drop('e2', 'e4');
     await waitFor(() => expect(fen()).toContain(' w '));
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
-    // The feedback stays, but during the user's next decision the board shows only the blue arrow.
-    expect(screen.getByText('Your move: e4. A stronger option was d4.')).toBeInTheDocument();
+    // The opponent's reply collapses the "stronger option" feedback: during the user's next decision
+    // it no longer names a move, and the board shows only the blue arrow.
+    expect(screen.getByRole('button', { name: /Your last move/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Your move: e4. A stronger option was d4.')).not.toBeInTheDocument();
     expect(arrowColors()).not.toContain('green');
     expect(screen.getByTestId('board').closest('.board')).toHaveAttribute('data-arrows', 'blue');
+    // Re-expanding it during the decision shows the text again, still without the green arrow.
+    fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+    expect(screen.getByText('Your move: e4. A stronger option was d4.')).toBeInTheDocument();
+    expect(arrowColors()).not.toContain('green');
+  });
+
+  describe('re-expanding a "stronger option" during the next decision', () => {
+    async function playE4ThenWait() {
+      const coach = fakeCoach();
+      coach.onUserMove = vi.fn(async (_g, move) => {
+        const v = { ...okVerdict(move.uci, move.san), bestUci: 'd2d4', bestSan: 'd4' };
+        return { verdict: v, message: strongerMessage(v) };
+      });
+      const ctx = await setup(undefined, { coach });
+      fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      drop('e2', 'e4');
+      await waitFor(() => expect(fen()).toContain(' w '));
+      await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+      ctx.onProfile.mockClear();
+      return ctx;
+    }
+
+    it('then playing the move it named is assisted', async () => {
+      const { onProfile } = await playE4ThenWait();
+      fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+      expect(screen.getByText('Your move: e4. A stronger option was d4.')).toBeInTheDocument();
+      drop('d2', 'd4');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)).toMatchObject({ assisted: true, good: false });
+    });
+
+    it('then playing another move is independent', async () => {
+      const { onProfile } = await playE4ThenWait();
+      fireEvent.click(screen.getByRole('button', { name: /Your last move/ }));
+      drop('c2', 'c4');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+    });
+
+    it('without re-expanding, the same move is independent', async () => {
+      const { onProfile } = await playE4ThenWait();
+      drop('d2', 'd4');
+      await waitFor(() => expect(onProfile).toHaveBeenCalled());
+      expect(lastRecord(onProfile)?.assisted).toBeUndefined();
+    });
+  });
+
+  it('a top or book move\'s "Your last move" stays open after the opponent replies', async () => {
+    const coach = fakeCoach();
+    coach.onUserMove = vi.fn(async (_g, move) => ({
+      verdict: okVerdict(move.uci, move.san),
+      message: { id: 'post-1', kind: 'post_move' as const, source: 'template' as const, arrows: [], verdict: okVerdict(move.uci, move.san),
+        summary: '✓ Book move. Do you see why?', topKind: 'book' as const, explained: false,
+        explanation: { whatHappened: 'Book idea.' } },
+    }));
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('e2', 'e4');
+    await waitFor(() => expect(fen()).toContain(' w '));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    expect(screen.getByRole('button', { name: /Your last move/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Yes, I got it' })).toBeInTheDocument();
   });
 
   it('Explain on a top move asks the coach, and the upgrade fills "Your last move" only', async () => {
