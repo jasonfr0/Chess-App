@@ -1,22 +1,18 @@
 import { Chess } from 'chess.js';
 import type { Move, Square } from 'chess.js';
-import type { Analysis, CoachLevel, Color, PlayedMove, Theme } from '../types';
-import type { BookHit } from '../openings/repertoire';
+import type { Color, PlayedMove, Theme } from '../types';
 import type { Verdict } from './classify';
 import { positionFacts } from './facts';
-import { lineScore } from './classify';
 import type { HangingPiece, PieceRef, PositionFacts } from './facts';
 
+/** Unused since the pre-move candidate list was removed; kept only until the UI drops it. */
 export interface Candidate { san: string; uci: string; note: string; best: boolean }
 export interface Explanation {
   whatHappened: string;
   better?: string;
   lesson?: string;
+  /** Unused (see Candidate). */
   candidates?: Candidate[];
-}
-export interface PreMoveContext {
-  fen: string; lastMove: PlayedMove; facts: PositionFacts;
-  analysis: Analysis; book: BookHit | null; level: CoachLevel;
 }
 export interface MistakeContext {
   verdict: Verdict; move: PlayedMove; factsAfter: PositionFacts;
@@ -40,12 +36,9 @@ export const THEME_LESSONS: Record<Theme, { title: string; habit: string }> = {
 };
 
 const NAMES: Record<PieceRef['piece'], string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
-const CANDIDATE_WINDOW = 150;
-const MAX_CANDIDATES = 3;
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
 const describe = (p: PieceRef, viewer: Color) => `${p.color === viewer ? 'your' : 'their'} ${NAMES[p.piece]} on ${p.square}`;
-const toUci = (m: Move) => m.from + m.to + (m.promotion ?? '');
 
 function joinList(items: string[]): string {
   return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
@@ -101,69 +94,6 @@ export function moveNote(fen: string, m: Move): string {
     return `develops your ${names[m.piece]}`;
   }
   return 'a solid move';
-}
-
-function engineCandidates(fen: string, analysis: Analysis): Candidate[] {
-  const scored = analysis.lines
-    .filter((l) => l.uci.length > 0)
-    .map((l) => ({ l, s: lineScore(l) }))
-    .sort((a, b) => b.s - a.s);
-  if (scored.length === 0) return [];
-  const top = scored[0].s;
-  const seen = new Set<string>();
-  const out: Candidate[] = [];
-  for (const { l, s } of scored) {
-    if (top - s > CANDIDATE_WINDOW || seen.has(l.uci[0])) continue;
-    seen.add(l.uci[0]);
-    try {
-      const m = new Chess(fen).move({ from: l.uci[0].slice(0, 2), to: l.uci[0].slice(2, 4), promotion: l.uci[0][4] });
-      out.push({ san: m.san, uci: l.uci[0], note: moveNote(fen, m), best: out.length === 0 });
-    } catch {
-      /* an unplayable engine move is dropped, never guessed */
-    }
-    if (out.length === MAX_CANDIDATES) break;
-  }
-  return out;
-}
-
-function candidatesFor(ctx: PreMoveContext): Candidate[] {
-  const engine = engineCandidates(ctx.fen, ctx.analysis);
-  const bestUci = engine[0]?.uci;
-  const out: Candidate[] = [];
-  for (const node of ctx.book?.node.children ?? []) {
-    if (out.length === MAX_CANDIDATES) break;
-    try {
-      const m = new Chess(ctx.fen).move(node.san);
-      out.push({ san: m.san, uci: toUci(m), note: node.idea, best: toUci(m) === bestUci });
-    } catch {
-      /* book move not legal here: skip */
-    }
-  }
-  for (const c of engine) {
-    if (out.length === MAX_CANDIDATES) break;
-    if (!out.some((o) => o.uci === c.uci)) out.push({ ...c, best: c.uci === bestUci });
-  }
-  return out;
-}
-
-export function preMoveTemplate(ctx: PreMoveContext): Explanation {
-  const { lastMove, facts, book } = ctx;
-  const me = opposite(lastMove.color);
-  const to = lastMove.uci.slice(2, 4);
-  const parts: string[] = [];
-  if (book) parts.push(book.node.idea);
-
-  const targets = facts.attackedBy(lastMove.uci).filter((p) => p.color === me && p.piece !== 'k');
-  const fork = facts.forks.find((f) => f.attacker.square === to && f.attacker.color === lastMove.color);
-  if (fork) {
-    parts.push(`Their ${NAMES[fork.attacker.piece]} on ${to} ${attacksList(fork.targets.map((t) => describe(t, me)))}.`);
-  } else if (targets.length > 0) {
-    parts.push(`Their last move, ${lastMove.san}, means their piece on ${to} now attacks ${joinList(targets.map((t) => describe(t, me)))}.`);
-  } else if (!book) {
-    parts.push(`Their last move was ${lastMove.san}.`);
-  }
-  if (facts.inCheck) parts.push('You are in check, so you must deal with it first.');
-  return { whatHappened: parts.slice(0, 3).join(' '), candidates: candidatesFor(ctx) };
 }
 
 /** The first refutation move's destination, if it lands on one of the mover's pieces. */

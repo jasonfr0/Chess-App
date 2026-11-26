@@ -59,7 +59,7 @@ export function postMoveTemplate(ctx: PostMoveContext): { summary: string; expla
   const mistakeCtx: MistakeContext = { verdict, move, factsAfter: ctx.factsAfter, themeCount: 0 };
   const reply = verdict.refutationSan[0];
   const gives = reply
-    ? `After ${move.san}, the engine's best answer for them is ${verdict.refutationSan.join(', ')}.`
+    ? `After ${move.san}, their best answer is ${reply}.`
     : `You played ${move.san}.`;
   return {
     summary: `Your move: ${move.san}. A stronger option was ${verdict.bestSan}.`,

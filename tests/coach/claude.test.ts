@@ -3,9 +3,8 @@ import { Chess } from 'chess.js';
 import { buildPacket, createExplainer, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
 import type { ClaudeClientLike, FactPacket } from '../../src/coach/claude';
 import type { Explanation, MistakeContext } from '../../src/coach/templates';
-import { mistakeTemplate, preMoveTemplate } from '../../src/coach/templates';
+import { mistakeTemplate } from '../../src/coach/templates';
 import { positionFacts } from '../../src/coach/facts';
-import { lookup } from '../../src/openings/repertoire';
 import type { ProfileSummary } from '../../src/types';
 
 const profile: ProfileSummary = { topThemes: [{ theme: 'hanging_piece', count: 3 }], gamesPlayed: 5 };
@@ -151,43 +150,7 @@ describe('validateClaims', () => {
   });
 });
 
-describe('validateClaims in a pre-move packet', () => {
-  // After 1.e4 e5 2.Nf3 Nc6: the book note for Bc4 talks about the position after Bc4,
-  // and the note on Black's last move may mention where its knight came from.
-  const c = new Chess();
-  for (const san of ['e4', 'e5', 'Nf3']) c.move(san);
-  const fenBefore = c.fen();
-  c.move('Nc6');
-  const fen = c.fen();
-  const p: FactPacket = { ...packet, kind: 'pre_move', fen, fenAfter: undefined, fenBefore, hanging: [] };
-
-  it('judges a candidate note against the position after that candidate', () => {
-    const e = { whatHappened: 'ok', candidates: [{ san: 'Bc4', uci: 'f1c4', note: 'Your bishop on c4 aims at f7.', best: true }] };
-    expect(validateClaims(e, p)).toBe(true);
-    const wrong = { whatHappened: 'ok', candidates: [{ san: 'Bc4', uci: 'f1c4', note: 'Your bishop on b5 pins.', best: true }] };
-    expect(validateClaims(wrong, p)).toBe(false);
-  });
-  it('accepts the opponent piece where it stood before its last move', () => {
-    expect(validateClaims({ whatHappened: 'Their knight on b8 came out to c6.' }, p)).toBe(true);
-    expect(validateClaims({ whatHappened: 'Their knight on d4 is strong.' }, p)).toBe(false);
-  });
-});
-
 describe('templates pass their own claim checks', () => {
-  it('a book pre-move template in the Italian', () => {
-    const c = new Chess();
-    for (const san of ['e4', 'e5', 'Nf3']) c.move(san);
-    const fenBefore = c.fen();
-    c.move('Nc6');
-    const fen = c.fen();
-    const lastMove = { san: 'Nc6', uci: 'b8c6', fenBefore, fenAfter: fen, color: 'b' as const };
-    const ctx = {
-      fen, lastMove, facts: positionFacts(fen), book: lookup('w', ['e4', 'e5', 'Nf3', 'Nc6']), level: 'full' as const,
-      analysis: { fen, depth: 10, lines: [{ uci: ['f1c4'], cp: 30, mate: null }, { uci: ['f1b5'], cp: 35, mate: null }] },
-    };
-    const t = preMoveTemplate(ctx);
-    expect(validateClaims(t, buildPacket('pre_move', ctx, t, profile))).toBe(true);
-  });
   it('a mistake template for a defended piece attacked by a pawn', () => {
     const fenBefore = '4k3/8/2p5/8/P7/2N5/8/4K3 w - - 0 1';
     const c = new Chess(fenBefore);
@@ -212,6 +175,13 @@ describe('explainWithClaude claim checks', () => {
     const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
     await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
     expect(reqs[0].system[0].text).toContain('"free" only if its reason is "undefended"');
+  });
+  it('tells Claude which position "hanging" refers to for post_move and mistake packets', async () => {
+    const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
+    await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
+    const text: string = reqs[0].system[0].text;
+    expect(text).toContain('"hanging" lists the pieces the opponent can win in "fenAfter" (the position after the user\'s move, for both post_move and mistake)');
+    expect(text).not.toContain('pre_move');
   });
 });
 

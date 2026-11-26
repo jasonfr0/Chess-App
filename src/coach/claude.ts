@@ -3,21 +3,19 @@ import type { Square } from 'chess.js';
 import { z } from 'zod/v4';
 import type { ProfileSummary } from '../types';
 import type { HangingPiece } from './facts';
-import type { Explanation, MistakeContext, PreMoveContext } from './templates';
+import type { Explanation, MistakeContext } from './templates';
 import type { PostMoveContext } from './postMove';
 
 export const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'] as const;
 export type ModelId = (typeof MODEL_IDS)[number];
 
 export interface FactPacket {
-  kind: 'pre_move' | 'post_move' | 'mistake';
-  /** pre_move: the current position. mistake: the position before the user's move. */
+  kind: 'post_move' | 'mistake';
+  /** The position before the user's move. */
   fen: string;
-  /** post_move/mistake: the position after the user's move. */
+  /** The position after the user's move. */
   fenAfter?: string;
-  /** pre_move only: the position before the opponent's last move. */
-  fenBefore?: string;
-  /** Pieces the opponent can win: in `fen` for pre_move, in `fenAfter` for a mistake. */
+  /** Pieces the opponent can win in `fenAfter`. */
   hanging: HangingPiece[];
   sanHistory: string[];
   allowedMoves: string[]; // every SAN Claude may mention
@@ -73,16 +71,16 @@ function boardOf(fen: string | undefined): Chess | null {
 
 /**
  * Squares and pieces in prose must match the packet (spec §8):
- * - "<piece> on <square>" needs that piece type on that square in `fen`, `fenAfter` or `fenBefore`
+ * - "<piece> on <square>" needs that piece type on that square in `fen` or `fenAfter`
  *   (a candidate's note may also describe the position after that candidate);
  * - a sentence about one particular piece that calls it "hanging" must name a square from the
  *   hanging list, and "free"/"undefended" additionally need that piece's reason to be "undefended".
  * Sentences naming no piece or square (general habits) are not claims about the board.
  */
 export function validateClaims(
-  e: Explanation, packet: Pick<FactPacket, 'fen' | 'fenAfter' | 'fenBefore' | 'hanging'>,
+  e: Explanation, packet: Pick<FactPacket, 'fen' | 'fenAfter' | 'hanging'>,
 ): boolean {
-  const boards = [packet.fen, packet.fenAfter, packet.fenBefore].map(boardOf).filter((b): b is Chess => b !== null);
+  const boards = [packet.fen, packet.fenAfter].map(boardOf).filter((b): b is Chess => b !== null);
   const afterCandidate = (san: string): Chess[] => {
     const b = boardOf(packet.fen);
     try { b?.move(san); return b ? [b] : []; } catch { return []; }
@@ -119,12 +117,11 @@ function allowedFrom(explicit: string[], t: Explanation): string[] {
   return [...set];
 }
 
-export function buildPacket(kind: 'pre_move', ctx: PreMoveContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(kind: 'post_move', ctx: PostMoveContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(kind: 'mistake', ctx: MistakeContext, t: Explanation, p: ProfileSummary): FactPacket;
 export function buildPacket(
-  kind: 'pre_move' | 'post_move' | 'mistake',
-  ctx: PreMoveContext | PostMoveContext | MistakeContext,
+  kind: 'post_move' | 'mistake',
+  ctx: PostMoveContext | MistakeContext,
   t: Explanation,
   p: ProfileSummary,
 ): FactPacket {
@@ -140,20 +137,6 @@ export function buildPacket(
         bestMove: v.bestSan, refutation: v.refutationSan, cpLoss: v.cpLoss, area: v.area,
         bookIdea: c.bookIdea, bookLine: c.lineName,
         forksAfter: forks, materialAfter: material, inCheckAfter: inCheck,
-      },
-      template: t, profile: p,
-    };
-  }
-  if (kind === 'pre_move') {
-    const c = ctx as PreMoveContext;
-    const { hanging, forks, material, inCheck } = c.facts;
-    return {
-      kind, fen: c.fen, fenBefore: c.lastMove.fenBefore, hanging, sanHistory: [c.lastMove.san],
-      allowedMoves: allowedFrom([c.lastMove.san], t),
-      facts: {
-        lastOpponentMove: c.lastMove.san, forks, material, inCheck,
-        engineLines: c.analysis.lines.map((l) => ({ cp: l.cp, mate: l.mate })),
-        book: c.book ? { lineName: c.book.lineName } : null, level: c.level,
       },
       template: t, profile: p,
     };
@@ -186,10 +169,9 @@ const SYSTEM_PROMPT = `You are a patient chess coach for a beginner rated about 
 Truth rule (strict):
 - Mention only moves listed in allowedMoves. Never calculate new lines or invent variations, and never contradict the facts.
 - Every claim about the position must come from the facts. Never claim a fork "wins" material; say it "attacks" the pieces.
-- "hanging" lists the pieces the opponent can win (in "fen" for pre_move, in "fenAfter" for a mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
-- When you write "<piece> on <square>", that piece must stand on that square in "fen", "fenAfter" or "fenBefore" (a candidate's note may also describe the position after that candidate).
+- "hanging" lists the pieces the opponent can win in "fenAfter" (the position after the user's move, for both post_move and mistake). Only call a piece "hanging" if it is in that list, and name its square. Call a piece "free" only if its reason is "undefended". A piece with reason "attacked_by_lower" is defended, but the attacker is worth less, so it "can be won" — never say it is free.
+- When you write "<piece> on <square>", that piece must stand on that square in "fen" or "fenAfter".
 - For kind "post_move": explain why the played move works (playedMoveIs "top" or "book") or why the stronger move is better than the played one ("not_top"); short, plain. Use only the template's reasons and the facts; never add a reason of your own.
-- Keep candidates (san, uci, best) exactly as in the template; you may only improve each note, using only true statements from the template and facts.
 
 Style:
 - Plain words. Name the piece and the square, for example "your knight on f6".

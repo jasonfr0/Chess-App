@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
-import { THEME_LESSONS, mistakeTemplate, preMoveTemplate } from '../../src/coach/templates';
+import { THEME_LESSONS, mistakeTemplate, moveNote } from '../../src/coach/templates';
 import type { Verdict } from '../../src/coach/classify';
 import { positionFacts } from '../../src/coach/facts';
-import { lookup } from '../../src/openings/repertoire';
-import type { Analysis, EngineLine, PlayedMove, Theme } from '../../src/types';
+import type { PlayedMove, Theme } from '../../src/types';
 
 function playAll(sans: string[]): PlayedMove[] {
   const c = new Chess();
@@ -15,7 +14,6 @@ function playAll(sans: string[]): PlayedMove[] {
     return { san: m.san, uci: m.from + m.to + (m.promotion ?? ''), fenBefore, fenAfter: c.fen(), color };
   });
 }
-const line = (uci: string[], cp: number | null, mate: number | null = null): EngineLine => ({ uci, cp, mate });
 
 describe('mistakeTemplate', () => {
   // 1.e4 e5 2.Nf3 d6 3.Nh4?? hangs the knight to Qxh4
@@ -104,55 +102,13 @@ describe('mistakeTemplate wording', () => {
   });
 });
 
-describe('preMoveTemplate', () => {
-  it('drops "both" when their piece attacks three of yours', () => {
-    // Nc2+ checks the king and attacks the rook on a1 and the queen on e3.
-    const fenBefore = '7k/8/8/8/1n6/4Q3/8/R3K3 b - - 0 1';
-    const c = new Chess(fenBefore);
-    c.move('Nc2+');
-    const last: PlayedMove = { san: 'Nc2+', uci: 'b4c2', fenBefore, fenAfter: c.fen(), color: 'b' };
-    const analysis: Analysis = { fen: last.fenAfter, depth: 8, lines: [line(['e1d1'], -300)] };
-    const e = preMoveTemplate({ fen: last.fenAfter, lastMove: last, facts: positionFacts(last.fenAfter), analysis, book: null, level: 'full' });
-    expect(e.whatHappened).toContain('Their knight on c2 attacks your queen on e3, your rook on a1 and your king on e1.');
-    expect(e.whatHappened).not.toContain('both');
-  });
-
-  it('puts book replies first with a note, in the Italian', () => {
-    const hist = playAll(['e4', 'e5', 'Nf3', 'Nc6']);
-    const last = hist[3];
-    const book = lookup('w', hist.map((m) => m.san));
-    expect(book).not.toBeNull();
-    const analysis: Analysis = { fen: last.fenAfter, depth: 10, lines: [line(['f1b5'], 30), line(['f1c4'], 25)] };
-    const e = preMoveTemplate({ fen: last.fenAfter, lastMove: last, facts: positionFacts(last.fenAfter), analysis, book, level: 'full' });
-    expect(e.candidates![0].san).toBe('Bc4');
-    expect(e.candidates![0].note.length).toBeGreaterThan(0);
-    expect(e.candidates!.length).toBeLessThanOrEqual(3);
-    expect(e.candidates!.filter((c) => c.best).length).toBeLessThanOrEqual(1);
-  });
-
-  it('without book: <=3 candidates within 150cp, exactly one best', () => {
-    const hist = playAll(['d4', 'Nf6', 'c4', 'e6']);
-    const last = hist[3];
-    const analysis: Analysis = {
-      fen: last.fenAfter, depth: 10,
-      lines: [line(['b1c3'], 40), line(['g1f3'], 30), line(['g2g3'], -80), line(['a2a3'], -100), line(['h2h4'], 10)],
-    };
-    const e = preMoveTemplate({ fen: last.fenAfter, lastMove: last, facts: positionFacts(last.fenAfter), analysis, book: null, level: 'full' });
-    const c = e.candidates!;
-    expect(c.map((x) => x.uci)).toEqual(['b1c3', 'g1f3', 'h2h4']);
-    expect(c.filter((x) => x.best)).toHaveLength(1);
-    expect(c[0].best).toBe(true);
-    expect(c.every((x) => x.note.length > 0)).toBe(true);
-    expect(c[1].note).toBe('develops your knight');
-  });
-
-  it('notes captures and checks truthfully', () => {
+describe('moveNote', () => {
+  it('notes captures, checks and development truthfully', () => {
     const fen = '4k3/8/8/4n3/8/8/R3R3/4K3 w - - 0 1';
-    const last: PlayedMove = { san: 'Ne5', uci: 'c6e5', fenBefore: fen, fenAfter: fen, color: 'b' };
-    const analysis: Analysis = { fen, depth: 8, lines: [line(['e2e5'], 300), line(['a2a8'], 290)] };
-    const e = preMoveTemplate({ fen, lastMove: last, facts: positionFacts(fen), analysis, book: null, level: 'full' });
-    expect(e.candidates![0].note).toBe('captures the knight on e5');
-    expect(e.candidates![1].note).toBe('gives check');
+    expect(moveNote(fen, new Chess(fen).move('Rxe5+'))).toBe('captures the knight on e5');
+    expect(moveNote(fen, new Chess(fen).move('Ra8+'))).toBe('gives check');
+    const start = new Chess().fen();
+    expect(moveNote(start, new Chess().move('Nf3'))).toBe('develops your knight');
   });
 });
 

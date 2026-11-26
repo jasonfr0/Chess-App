@@ -58,4 +58,9 @@ describe('postMoveTemplate', () => {
     expect(t.explanation.better).toContain('e4');
     expect(t.explanation.whatHappened).toContain('e5');
   });
+  it('better: names only their reply, never the user\'s follow-up as "their" move', () => {
+    const t = postMoveTemplate(ctx(start, 'a3', {}, { bestSan: 'e4', bestUci: 'e2e4', refutationSan: ['e5', 'Nf3', 'Nc6'] }));
+    expect(t.explanation.whatHappened).toBe('After a3, their best answer is e5.');
+    expect(t.explanation.whatHappened).not.toContain('Nf3');
+  });
 });

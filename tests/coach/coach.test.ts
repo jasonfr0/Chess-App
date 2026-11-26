@@ -5,6 +5,7 @@ import type { Verdict } from '../../src/coach/classify';
 import { THEME_LESSONS } from '../../src/coach/templates';
 import type { Explanation } from '../../src/coach/templates';
 import type { FactPacket } from '../../src/coach/claude';
+import { HABIT_QUESTIONS } from '../../src/coach/questions';
 import type { Engine } from '../../src/engine/engine';
 import { GameState } from '../../src/game/gameState';
 import type { Analysis, CoachLevel, EngineLine } from '../../src/types';
@@ -277,6 +278,11 @@ describe('Coach analysis cache', () => {
   });
 });
 
+// Black to move after White's quiet Kg1; ...Ra1 is mate on the back rank.
+const MATE_START = 'r5k1/5ppp/8/8/8/8/5PPP/7K w - - 0 30';
+const MATE_FEN = 'r5k1/5ppp/8/8/8/8/5PPP/6K1 b - - 1 30';
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
 describe('Coach.preMove', () => {
   it('returns null at light and solo, but prefetches the analysis for the user\'s move', async () => {
     for (const level of ['light', 'solo'] as CoachLevel[]) {
@@ -290,17 +296,40 @@ describe('Coach.preMove', () => {
     }
   });
 
-  it('force: true (Ask the coach) gives the message at light, without choices-only extras', async () => {
+  it('force: true (Ask the coach) gives the pre_move at light', async () => {
     const engine = new FakeEngine(bishopTable());
     const coach = new Coach(makeDeps(engine, { levelFor: () => 'light' }));
     const game = new GameState('b', BISHOP_START, ['c1g5']);
     const m = await coach.preMove(game, { force: true });
     expect(m?.kind).toBe('pre_move');
-    expect(m?.explanation.whatHappened).toContain('knight on f6');
-    expect(m?.blunderCheck).toBeUndefined();
+    expect(m?.theirMove).toContain('knight on f6');
   });
 
-  it('at full gives whatHappened, candidates, arrows and a blunder check', async () => {
+  it('works on move 1 as White: questions, no arrows, no move named', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const engine = new FakeEngine({ [START_FEN]: [line(['e2e4'], 30)] });
+    const coach = new Coach(makeDeps(engine, { explain }));
+    const game = new GameState('w');
+    const m = await coach.preMove(game);
+    expect(m?.kind).toBe('pre_move');
+    expect(m?.theirMove).toBeNull();
+    expect(m?.questions?.length).toBeGreaterThanOrEqual(2);
+    expect(m?.arrows).toEqual([]);
+    expect(m?.blunderCheck).toBeUndefined();
+    expect(m?.explanation.candidates).toBeUndefined();
+    await flush();
+    expect(explain).not.toHaveBeenCalled();
+  });
+
+  it('drops a nudge that only repeats one of the questions', async () => {
+    // On move 1 the only nudge is the opening plan, which is also the first question.
+    const coach = new Coach(makeDeps(new FakeEngine({ [START_FEN]: [line(['e2e4'], 30)] })));
+    const m = await coach.preMove(new GameState('w'));
+    expect(m?.questions?.length).toBeGreaterThan(0);
+    expect(m?.nudge).toBeNull();
+  });
+
+  it('after an opponent move: blue arrow only, a fact-backed nudge, and no Claude call', async () => {
     const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
     const engine = new FakeEngine(bishopTable());
     const coach = new Coach(makeDeps(engine, { explain }));
@@ -308,109 +337,109 @@ describe('Coach.preMove', () => {
     const m = await coach.preMove(game);
     expect(m?.kind).toBe('pre_move');
     expect(m?.source).toBe('template');
-    expect(m?.explanation.whatHappened).toContain('your knight on f6');
-    expect(m?.explanation.candidates?.[0].san).toBe('Nd5');
-    expect(m?.arrows).toEqual([
-      { from: 'c1', to: 'g5', color: 'blue' },
-      { from: 'f6', to: 'd5', color: 'green' },
-    ]);
-    expect(m?.blunderCheck?.prompt).toMatch(/what does their last move attack/i);
-    expect(m?.blunderCheck?.answer).toContain('Their bishop on g5 now attacks your knight on f6');
-    expect(engine.calls).toEqual([{ fen: BISHOP_FEN, multipv: 3, depth: 14 }]);
-    expect(explain.mock.calls[0][0].kind).toBe('pre_move');
-  });
-
-  it('blunder check says nothing else is loose when only the attacked piece is', async () => {
-    // Bg5 attacks the f6 knight, which the g7 pawn defends; the a8 rook is attacked by nobody.
-    const start = 'r3k3/6p1/5n2/8/8/8/8/2B1K3 w - - 0 1';
-    const game = new GameState('b', start, ['c1g5']);
-    const engine = new FakeEngine({ [game.fen()]: [line(['e8f7'], 0)] });
-    const coach = new Coach(makeDeps(engine));
-    const m = await coach.preMove(game);
-    expect(m?.blunderCheck?.answer).toBe(
-      'Their bishop on g5 now attacks your knight on f6. Nothing else of yours is under attack without protection.',
-    );
-  });
-
-  it('at guided has no blunder check', async () => {
-    const coach = new Coach(makeDeps(new FakeEngine(bishopTable()), { levelFor: () => 'guided' }));
-    const game = new GameState('b', BISHOP_START, ['c1g5']);
-    const m = await coach.preMove(game);
-    expect(m?.explanation.whatHappened).toBeTruthy();
+    expect(m?.arrows).toEqual([{ from: 'c1', to: 'g5', color: 'blue' }]);
+    expect(m?.theirMove).toContain('Their bishop now attacks your knight on f6');
+    expect(m?.questions).toContain('One of your pieces is under attack and not safely protected. Can you find it?');
+    expect(m?.nudge).toBe('Look at your knight on f6.');
     expect(m?.blunderCheck).toBeUndefined();
+    expect(engine.calls).toEqual([{ fen: BISHOP_FEN, multipv: 3, depth: 14 }]);
+    await flush();
+    expect(explain).not.toHaveBeenCalled();
   });
 
-  it('passes the book hit for the opponent\'s last move', async () => {
-    // User is Black; 1.e4 is in the Black repertoire (answered by 1...e5).
-    const game = new GameState('b', undefined, ['e2e4']);
-    const engine = new FakeEngine({ [game.fen()]: [line(['e7e5'], -20)] });
-    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
-    const coach = new Coach(makeDeps(engine, { explain }));
+  it('answers at once with habit questions, then updates the same id when the analysis arrives', async () => {
+    const engine = new FakeEngine({ [MATE_FEN]: [line(['a8a1'], null, 1)] });
+    const gate = deferred<void>();
+    engine.gate = gate.promise;
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(engine));
+    coach.onUpdate((m) => updates.push(m));
+    const game = new GameState('b', MATE_START, ['h1g1']);
     const m = await coach.preMove(game);
-    expect(m?.explanation.candidates?.some((c) => c.san === 'e5')).toBe(true);
-    expect(explain.mock.calls[0][0].facts.book).not.toBeNull();
+    expect(m?.kind).toBe('pre_move');
+    expect(m?.questions).toEqual([...HABIT_QUESTIONS]);
+    expect(m?.nudge).toBeNull();
+
+    gate.resolve();
+    await flush();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe(m!.id);
+    expect(updates[0].kind).toBe('pre_move');
+    expect(updates[0].questions?.[0]).toBe("There's a way to win right now. Look at every check you can give.");
+    expect(updates[0].nudge).toBe('Look at checks with your rook.');
+    expect(updates[0].arrows).toEqual([{ from: 'h1', to: 'g1', color: 'blue' }]);
   });
 
-  it('blunder check after a discovered check does not over-claim', async () => {
-    // Ne4-c5 uncovers the e1 rook's check on the e8 king; the knight itself attacks nothing.
-    const game = new GameState('b', '4k3/8/8/8/4N3/8/8/4R1K1 w - - 0 1', ['e4c5']);
-    const engine = new FakeEngine({ [game.fen()]: [line(['e8f7'], -500)] });
-    const m = await new Coach(makeDeps(engine)).preMove(game);
-    expect(m?.blunderCheck?.answer).toBe(
-      'You are in check. Their knight on c5 does not attack anything of yours. ' +
-        'Nothing of yours is under attack without protection.',
-    );
+  it('uses an analysis that is already in hand straight away (no update needed)', async () => {
+    const engine = new FakeEngine({ [MATE_FEN]: [line(['a8a1'], null, 1)] });
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(engine));
+    coach.onUpdate((m) => updates.push(m));
+    const game = new GameState('b', MATE_START, ['h1g1']);
+    await coach.preMove(game);
+    await flush();
+    updates.length = 0;
+    const again = await coach.preMove(game);
+    expect(again?.questions?.[0]).toBe("There's a way to win right now. Look at every check you can give.");
+    await flush();
+    expect(updates).toHaveLength(0);
+    expect(engine.calls).toHaveLength(1);
   });
 
-  it('blunder check after a discovered attack names the exposed piece', async () => {
-    // Be4-b1 uncovers the e1 rook's attack on the undefended e7 rook.
-    const game = new GameState('b', 'k7/4r3/8/8/4B3/8/8/4R1K1 w - - 0 1', ['e4b1']);
-    const engine = new FakeEngine({ [game.fen()]: [line(['e7e1'], 0)] });
-    const answer = (await new Coach(makeDeps(engine)).preMove(game))?.blunderCheck?.answer ?? '';
-    expect(answer).not.toContain('Their last move does not attack');
-    expect(answer).toBe(
-      'Their bishop on b1 does not attack anything of yours. Your rook on e7 is under attack and not safely protected.',
-    );
-  });
-
-  it('returns null if the user moves while the engine is thinking, and shares the search', async () => {
+  it('drops the analysis update once the user has moved, and shares the search', async () => {
     const after = '4k3/8/8/3n2B1/8/8/8/4K3 w - - 2 2';
     const engine = new FakeEngine({ ...bishopTable(), [after]: [line(['g5d2'], 0)] });
     const gate = deferred<void>();
     engine.gate = gate.promise;
-    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
-    const coach = new Coach(makeDeps(engine, { explain }));
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(engine));
+    coach.onUpdate((m) => updates.push(m));
     const game = new GameState('b', BISHOP_START, ['c1g5']);
-    const pre = coach.preMove(game);
+    const pre = await coach.preMove(game);
+    expect(pre?.kind).toBe('pre_move');
     const move = game.play('f6d5');
     const user = coach.onUserMove(game, move);
     gate.resolve();
-    expect(await pre).toBeNull();
     await user;
     await flush();
+    expect(updates.some((u) => u.id === pre!.id)).toBe(false);
     expect(engine.calls.map((c) => c.fen)).toEqual([BISHOP_FEN, after]);
-    expect(explain).not.toHaveBeenCalled();
   });
 
-  it('returns null when the engine rejects', async () => {
-    const coach = new Coach(makeDeps(new FakeEngine({}, true)));
-    const game = new GameState('b', BISHOP_START, ['c1g5']);
-    await expect(coach.preMove(game)).resolves.toBeNull();
+  it('drops the analysis update after cancelPending() or a newer preMove', async () => {
+    for (const interrupt of ['cancel', 'newer'] as const) {
+      const engine = new FakeEngine({ [MATE_FEN]: [line(['a8a1'], null, 1)] });
+      const gate = deferred<void>();
+      engine.gate = gate.promise;
+      const updates: CoachMessage[] = [];
+      const coach = new Coach(makeDeps(engine));
+      coach.onUpdate((m) => updates.push(m));
+      const game = new GameState('b', MATE_START, ['h1g1']);
+      const first = await coach.preMove(game);
+      if (interrupt === 'cancel') coach.cancelPending();
+      else await coach.preMove(game);
+      gate.resolve();
+      await flush();
+      expect(updates.some((u) => u.id === first!.id)).toBe(false);
+    }
   });
 
-  it('drops a pre-move Claude upgrade once the user has moved', async () => {
-    const d = deferred<Explanation | null>();
+  it('returns the facts-only message when the engine rejects, with no update', async () => {
     const updates: CoachMessage[] = [];
-    const after = '4k3/8/8/3n2B1/8/8/8/4K3 w - - 2 2';
-    const engine = new FakeEngine({ ...bishopTable(), [after]: [line(['g5d2'], 0)] });
-    const coach = new Coach(makeDeps(engine, { explain: () => d.promise }));
+    const coach = new Coach(makeDeps(new FakeEngine({}, true)));
     coach.onUpdate((m) => updates.push(m));
     const game = new GameState('b', BISHOP_START, ['c1g5']);
-    await coach.preMove(game);
-    await coach.onUserMove(game, game.play('f6d5'));
-    d.resolve({ whatHappened: 'late' });
+    const m = await coach.preMove(game);
+    expect(m?.kind).toBe('pre_move');
     await flush();
     expect(updates).toHaveLength(0);
+  });
+
+  it('returns null when it is not the user\'s turn or the game is over', async () => {
+    const coach = new Coach(makeDeps(new FakeEngine({})));
+    expect(await coach.preMove(new GameState('b'))).toBeNull();
+    const over = new GameState('b', '7k/6pp/8/8/8/8/8/R5K1 w - - 0 1', ['a1a8']);
+    expect(await coach.preMove(over)).toBeNull();
   });
 
   it('gives messages unique ids', async () => {
@@ -419,6 +448,178 @@ describe('Coach.preMove', () => {
     const a = await coach.preMove(game);
     const b = await coach.preMove(game);
     expect(a!.id).not.toBe(b!.id);
+  });
+});
+
+// White to move; Ke2 is best (300), Kd2 is 40 cp worse but not a mistake.
+const KING_FEN = KNIGHT_FEN;
+const kingTable = (game: GameState): Record<string, EngineLine[]> => {
+  const after = (uci: string) => {
+    const g = new GameState('w', game.fen());
+    return g.play(uci).fenAfter;
+  };
+  return {
+    [KING_FEN]: [line(['e1e2', 'e8e7'], 300), line(['e1d2', 'e8e7'], 260)],
+    [after('e1e2')]: [line(['e8e7', 'f3d4'], -300)],
+    [after('e1d2')]: [line(['e8d7', 'f3d4'], -260)],
+  };
+};
+
+describe('Coach post_move', () => {
+  function setup(over: Partial<CoachDeps> = {}) {
+    const game = new GameState('w', KING_FEN);
+    const engine = new FakeEngine(kingTable(game));
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(engine, over));
+    coach.onUpdate((m) => updates.push(m));
+    return { game, engine, coach, updates };
+  }
+
+  it('the engine\'s best move gives a top post_move with no Claude call and no arrow', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { game, coach } = setup({ explain });
+    const { verdict, message } = await coach.onUserMove(game, game.play('e1e2'));
+    expect(verdict.flagged).toBe(false);
+    expect(message?.kind).toBe('post_move');
+    expect(message?.topKind).toBe('top');
+    expect(message?.summary).toBe("✓ That's the top move. Do you see why it works?");
+    expect(message?.explained).toBe(false);
+    expect(message?.arrows).toEqual([]);
+    await flush();
+    expect(explain).not.toHaveBeenCalled();
+  });
+
+  it('explainTopMove shows the template, asks Claude once, and caches', async () => {
+    const d = deferred<Explanation | null>();
+    const explain = vi.fn((_p: FactPacket) => d.promise);
+    const { game, coach, updates } = setup({ explain });
+    const { message } = await coach.onUserMove(game, game.play('e1e2'));
+    await coach.explainTopMove(message!.id);
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe(message!.id);
+    expect(updates[0].explained).toBe(true);
+    expect(updates[0].source).toBe('template');
+    expect(updates[0].explanation).toEqual(message!.explanation);
+    await flush();
+    expect(explain).toHaveBeenCalledTimes(1);
+    expect(explain.mock.calls[0][0].kind).toBe('post_move');
+    expect(explain.mock.calls[0][0].facts.playedMoveIs).toBe('top');
+
+    d.resolve({ whatHappened: 'Ke2 keeps your king close to the knight.' });
+    await flush();
+    expect(updates).toHaveLength(2);
+    expect(updates[1].source).toBe('claude');
+    expect(updates[1].explained).toBe(true);
+    expect(updates[1].explanation.whatHappened).toBe('Ke2 keeps your king close to the knight.');
+
+    await coach.explainTopMove(message!.id);
+    await flush();
+    expect(explain).toHaveBeenCalledTimes(1);
+    expect(updates).toHaveLength(2);
+  });
+
+  it('explainTopMove ignores an id that is not the current post_move', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { game, coach, updates } = setup({ explain });
+    await coach.onUserMove(game, game.play('e1e2'));
+    await coach.explainTopMove('coach-999');
+    await flush();
+    expect(explain).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it('a move 40 cp worse (not flagged) gives a stronger-option post_move, a Claude call and a green arrow', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve(null));
+    const { game, coach } = setup({ explain });
+    const { verdict, message } = await coach.onUserMove(game, game.play('e1d2'));
+    expect(verdict.flagged).toBe(false);
+    expect(message?.kind).toBe('post_move');
+    expect(message?.topKind).toBeNull();
+    expect(message?.summary).toBe('Your move: Kd2. A stronger option was Ke2.');
+    expect(message?.arrows).toEqual([{ from: 'e1', to: 'e2', color: 'green' }]);
+    await flush();
+    expect(explain).toHaveBeenCalledTimes(1);
+    expect(explain.mock.calls[0][0].kind).toBe('post_move');
+    expect(explain.mock.calls[0][0].facts.playedMoveIs).toBe('not_top');
+  });
+
+  it('keeps a stronger-option upgrade through the opponent\'s reply and the next preMove', async () => {
+    const d = deferred<Explanation | null>();
+    const { game, coach, updates } = setup({ explain: () => d.promise });
+    const { message } = await coach.onUserMove(game, game.play('e1d2'));
+    game.play('e8d7');
+    await coach.preMove(game);
+    await flush();
+    updates.length = 0;
+    d.resolve({ whatHappened: 'Ke2 was a little better.' });
+    await flush();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe(message!.id);
+    expect(updates[0].source).toBe('claude');
+  });
+
+  it('a book move gives a book post_move; explainTopMove shows the idea and never calls Claude', async () => {
+    const explain = vi.fn((_p: FactPacket) => Promise.resolve({ whatHappened: 'x' }));
+    const game = new GameState('w');
+    const move = game.play('e2e4');
+    const engine = new FakeEngine({ [START_FEN]: [line(['d2d4'], 500)], [move.fenAfter]: [line(['e7e5'], 500)] });
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(engine, { explain }));
+    coach.onUpdate((m) => updates.push(m));
+    const { message } = await coach.onUserMove(game, move);
+    expect(message?.kind).toBe('post_move');
+    expect(message?.topKind).toBe('book');
+    expect(message?.summary).toBe('✓ Book move. Do you see why?');
+    expect(message?.arrows).toEqual([]);
+    await coach.explainTopMove(message!.id);
+    await flush();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].explained).toBe(true);
+    expect(updates[0].explanation.whatHappened.length).toBeGreaterThan(0);
+    expect(explain).not.toHaveBeenCalled();
+  });
+
+  it('drops a late Claude result after the next onUserMove or cancelPending()', async () => {
+    for (const interrupt of ['next', 'cancel'] as const) {
+      const d = deferred<Explanation | null>();
+      const { game, coach, updates } = setup({ explain: () => d.promise });
+      const { message } = await coach.onUserMove(game, game.play('e1d2'));
+      if (interrupt === 'cancel') {
+        coach.cancelPending();
+      } else {
+        game.play('e8d7');
+        await coach.onUserMove(game, game.play('d2e2'));
+      }
+      d.resolve({ whatHappened: 'late' });
+      await flush();
+      expect(updates.some((u) => u.id === message!.id)).toBe(false);
+    }
+  });
+
+  it('drops a late explainTopMove result after the next onUserMove or cancelPending()', async () => {
+    for (const interrupt of ['next', 'cancel'] as const) {
+      const d = deferred<Explanation | null>();
+      const { game, coach, updates } = setup({ explain: () => d.promise });
+      const { message } = await coach.onUserMove(game, game.play('e1e2'));
+      await coach.explainTopMove(message!.id);
+      if (interrupt === 'cancel') {
+        coach.cancelPending();
+      } else {
+        game.play('e8e7');
+        await coach.onUserMove(game, game.play('e2d2'));
+      }
+      updates.length = 0;
+      d.resolve({ whatHappened: 'late' });
+      await flush();
+      expect(updates.some((u) => u.id === message!.id)).toBe(false);
+    }
+  });
+
+  it('gives no post_move when the move could not be analysed', async () => {
+    const coach = new Coach(makeDeps(new FakeEngine({})));
+    const game = new GameState('w', KING_FEN);
+    const { message } = await coach.onUserMove(game, game.play('e1e2'));
+    expect(message).toBeNull();
   });
 });
 
