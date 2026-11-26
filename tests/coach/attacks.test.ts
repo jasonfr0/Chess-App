@@ -18,7 +18,7 @@ describe('attackMap', () => {
   });
 
   it('still counts attacks by a pinned piece', () => {
-    // black knight e5 pinned by rook e8 against... white rook e1 pins knight to king e8? use black king e8
+    // black knight e5 is pinned to the black king e8 by the white rook e1
     const m = attackMap('4k3/8/8/4n3/8/8/8/4R1K1 w - - 0 1', 'b');
     expect(m.squares).toContain('d3');
     expect(m.squares).toContain('f3');

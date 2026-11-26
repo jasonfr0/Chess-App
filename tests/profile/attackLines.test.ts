@@ -30,8 +30,17 @@ describe('suggestLinesOff', () => {
   it('false if one game has a flagged hanging_piece', () => {
     expect(suggestLinesOff([g(1), g(2, { verdicts: [verdict('hanging_piece', true)] }), g(3)])).toBe(false);
   });
-  it('unflagged theme does not disqualify', () => {
+  it('unflagged inaccuracy with a threat theme does not disqualify', () => {
     expect(suggestLinesOff([g(1), g(2, { verdicts: [verdict('hanging_piece', false)] }), g(3)])).toBe(true);
+  });
+  it('unflagged blunder/mistake with a threat theme disqualifies', () => {
+    for (const severity of ['blunder', 'mistake'] as const) {
+      const v = { ...verdict('hanging_piece', false), severity };
+      expect(suggestLinesOff([g(1), g(2, { verdicts: [v] }), g(3)])).toBe(false);
+    }
+  });
+  it('clamps the ratio at 1', () => {
+    expect(suggestLinesOff([g(1), g(2, { attackLinesMoves: 30, userMoves: 20 }), g(3)])).toBe(true);
   });
   it('false with only 2 games', () => {
     expect(suggestLinesOff([g(1), g(2)])).toBe(false);

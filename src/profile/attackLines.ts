@@ -18,7 +18,7 @@ export function suggestLinesOff(lastGames: SavedGame[]): boolean {
   return recent.every((g) => {
     const total = g.userMoves ?? 0;
     const lines = g.attackLinesMoves ?? 0;
-    if (total < MIN_USER_MOVES || lines / total < MIN_SHARE) return false;
-    return !g.verdicts.some((v) => v.flagged && THREAT_THEMES.includes(v.theme));
+    if (total < MIN_USER_MOVES || Math.min(1, lines / total) < MIN_SHARE) return false;
+    return !g.verdicts.some((v) => (v.flagged || v.severity === 'mistake' || v.severity === 'blunder') && THREAT_THEMES.includes(v.theme));
   });
 }
