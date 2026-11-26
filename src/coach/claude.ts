@@ -26,10 +26,10 @@ export interface FactPacket {
 }
 
 const SAN_RE = /\b([O0]-[O0](-[O0])?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?[+#]?)\b/gi;
-const strip = (s: string) => s.replace(/[+#]/g, '').replace(/0/g, 'O');
+export const strip = (s: string) => s.replace(/[+#]/g, '').replace(/0/g, 'O');
 
 /** SAN-like tokens that are really moves: piece-letter start, a capture, or castling. Bare squares are not. */
-function moveTokens(text: string): string[] {
+export function moveTokens(text: string): string[] {
   return (text.match(SAN_RE) ?? []).filter(
     (t) => /^[KQRBN]/.test(t) || (/^[kqrbn]/.test(t) && t.length >= 3) || /[x=]/i.test(t) || /^[O0]-[O0]/.test(t),
   );
@@ -43,12 +43,17 @@ function explanationStrings(e: Explanation): string[] {
   return out;
 }
 
+/** True when a SAN token (as found by moveTokens) is in the allowed set, ignoring check marks, 0-0 spelling and piece-letter case. */
+export function isAllowedToken(t: string, ok: Set<string>): boolean {
+  const n = strip(t);
+  return ok.has(n) || ok.has(n[0].toUpperCase() + n.slice(1));
+}
+
 export function validateExplanation(e: Explanation, allowed: string[]): boolean {
   const ok = new Set(allowed.map(strip));
   for (const s of explanationStrings(e)) {
     for (const t of moveTokens(s)) {
-      const n = strip(t);
-      if (!ok.has(n) && !ok.has(n[0].toUpperCase() + n.slice(1))) return false;
+      if (!isAllowedToken(t, ok)) return false;
     }
   }
   for (const c of e.candidates ?? []) if (!ok.has(strip(c.san))) return false;
