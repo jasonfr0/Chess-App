@@ -802,7 +802,7 @@ describe('GameScreen history', () => {
     const live = fen();
     const recorded = onProfile.mock.calls.length;
     expect(marks()).toContain('d2:ring');
-    expect(marks().some((m) => m.endsWith(':attacked'))).toBe(true);
+    expect(marks().some((m) => m.endsWith(':attacked'))).toBe(false); // attack lines never tint squares
     const view = async () => {
       fireEvent.click(within(screen.getByLabelText('Moves')).getByRole('button', { name: 'a3' }));
       expect(fen()).toBe(fenAfter(START, ['a2a3']));
@@ -932,10 +932,10 @@ describe('boardDecorations', () => {
     const fenE4D5 = 'rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2';
     const on = kinds(fenE4D5, { attackLines: true });
     expect(on.arrows).toEqual([{ startSquare: 'd5', endSquare: 'e4', color: '#d9302c' }]);
-    expect(on.marks).toContain('e4:attacked');
-    expect(on.marks).toContain('c4:attacked');
-    expect(on.marks).not.toContain('d4:attacked'); // pawn pushes do not attack
-    expect(on.styles.c4?.backgroundImage).toMatch(/rgba\(217, ?48, ?44, ?0\.\d+\)/);
+    // Only arrows to the user's attacked pieces: no tint on attacked squares.
+    expect(on.marks.some((m) => m.endsWith(':attacked'))).toBe(false);
+    expect(on.styles.c4).toBeUndefined();
+    expect(on.styles.e4).toBeUndefined();
     for (const o of [{ isUserTurn: false }, { viewing: true }, { watching: true }, { attackLines: false }]) {
       const off = kinds(fenE4D5, { attackLines: true, ...o });
       expect(off.arrows).toEqual([]);
@@ -986,7 +986,7 @@ describe('GameScreen board decorations', () => {
     await waitFor(() => expect(board.options?.allowDragging).toBe(true));
     expect(arrowColors()).toEqual(['red']);
     expect(screen.getByTestId('board').closest('.board')).toHaveAttribute('data-arrows', 'red');
-    expect(marks()).toContain('e4:attacked');
+    expect(marks()).toEqual([]); // arrows only, no tinted squares
     engine.hold = true;
     drop('a2', 'a3');
     await waitFor(() => expect(engine.calls.some((c) => c.depth === 10)).toBe(true));

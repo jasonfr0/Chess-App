@@ -135,8 +135,7 @@ Template and Claude mistake text must not name the better move. The packet's `al
 - **Setting:** "Show attack lines — moves made with this on count as helped". Off by default.
 - **When shown:** only during the user's turn in the live game. Not during the opponent's turn, history view or Watch-what-happens.
 - **What is drawn:**
-  - every square the opponent attacks gets a faint red tint;
-  - each of the user's pieces under attack gets a red line from each attacker.
+  - each of the user's pieces under attack gets a red arrow from each attacker. No square tinting (changed 2026-11-27 at the user's request: tinting every attacked square was correct but not useful).
 - Attacks are pseudo-legal attacks by the opponent's pieces, including pinned pieces, since they still attack. Facts come from chess.js.
 - **Skill accounting:** any move made while attack lines are on is recorded as **helped** (`assisted: true`).
 - **Coach recommendation:**

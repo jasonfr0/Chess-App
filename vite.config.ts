@@ -8,8 +8,8 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      registerType: 'prompt',
+      injectRegister: false, // registered by src/ui/UpdatePrompt.tsx, which asks before reloading
       includeAssets: ['icons/*.png'],
       manifest: {
         name: 'Chess Coach',

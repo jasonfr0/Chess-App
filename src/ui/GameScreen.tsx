@@ -26,9 +26,8 @@ const LAST_MOVE: CSSProperties = { backgroundColor: 'rgba(255, 213, 0, 0.3)' };
 const CHECK: CSSProperties = { backgroundColor: 'rgba(217, 48, 44, 0.75)' };
 const RING: CSSProperties = { boxShadow: 'inset 0 0 0 4px rgba(242, 194, 0, 0.95)' };
 /** Low opacity so pieces stay readable; an image layer so it sits over the last-move colour. */
-const ATTACKED: CSSProperties = { backgroundImage: 'linear-gradient(rgba(217, 48, 44, 0.2), rgba(217, 48, 44, 0.2))' };
 
-export type SquareMark = 'check' | 'ring' | 'attacked';
+export type SquareMark = 'check' | 'ring';
 
 /** Layers b over a: background images stack (b on top), everything else in b wins. */
 function layer(a: CSSProperties | undefined, b: CSSProperties): CSSProperties {
@@ -39,8 +38,7 @@ function layer(a: CSSProperties | undefined, b: CSSProperties): CSSProperties {
 /**
  * Board aids derived from chess.js facts. Check: the checked king's square, always. Rings: only on the
  * live board (not in history view or the watch player). Attack lines: only during the user's live
- * decision, as a faint tint on every square the opponent attacks and a red arrow from each attacker to
- * each user piece it hits. `marks` lists "square:kind" for tests (data-squares).
+ * decision, a red arrow from each opponent attacker to each of the user's pieces it hits (no tint). `marks` lists "square:kind" for tests (data-squares).
  */
 export function boardDecorations(input: {
   fen: string; userColor: Color; isUserTurn: boolean; viewing: boolean; watching: boolean;
@@ -62,7 +60,6 @@ export function boardDecorations(input: {
   if (live) for (const sq of new Set(rings)) mark(sq, 'ring', RING);
   if (live && attackLines && isUserTurn) {
     const attacks = attackMap(fen, userColor === 'w' ? 'b' : 'w');
-    for (const sq of attacks.squares) mark(sq, 'attacked', ATTACKED);
     for (const l of attacks.lines) arrows.push({ startSquare: l.from, endSquare: l.to, color: ARROW_COLORS.red });
   }
   return { squareStyles, arrows, marks };
