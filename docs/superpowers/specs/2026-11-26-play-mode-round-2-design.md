@@ -179,7 +179,7 @@ Template and Claude mistake text must not name the better move. The packet's `al
   - It is allowed in any phase, including while the mistake card is open; the board is read-only anyway.
   - The "New move — Back to game" cue only says that a move happened. It reveals no evaluation or threat.
 - **Hint 2:** it rings the piece the better move starts from. It names no destination.
-- **Attack-line colours:** tints are low-opacity so pieces stay readable. Lines use the existing arrow component in red.
+- **Attack-line colours:** red arrows using the existing arrow component; no square tints.
 - **History view and the clock:** opening history view doesn't pause the clock (timed games are a later opt-in feature).
 
 ## Left to the builder
