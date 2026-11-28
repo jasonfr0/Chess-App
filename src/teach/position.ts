@@ -49,10 +49,9 @@ export function positionText(input: {
   if (mode === 'show' && theirs.length > 0) {
     out.push(`${capitalise(pieceList(theirs, 'their'))} ${theirs.length > 1 ? 'are' : 'is'} not guarded.`);
   }
-  if (lineName) {
-    out.push(`You're in the ${lineName}.`);
-    if (plan) out.push(plan);
-  }
+  if (lineName) out.push(`You're in the ${lineName}.`);
+  // Before White's first move there is no line name yet, but there is a plan.
+  if (plan) out.push(plan);
   if (out.length === 0) out.push(TOPIC_FOCUS[topic]);
   return out.slice(0, 2).join(' ');
 }

@@ -7,6 +7,7 @@ import type { Engine } from '../../src/engine/engine';
 import { GameState } from '../../src/game/gameState';
 import type { Analysis, EngineLine, TeachMode } from '../../src/types';
 import type { Explanation } from '../../src/coach/templates';
+import { rootPlan } from '../../src/openings/repertoire';
 import type { FactPacket } from '../../src/coach/claude';
 
 const line = (uci: string[], cp: number | null, mate: number | null = null): EngineLine => ({ uci, cp, mate });
@@ -64,6 +65,14 @@ const knightTable = (): Record<string, EngineLine[]> => ({
   [KNIGHT_FEN]: [line(['e1e2'], 200)],
   [KNIGHT_AFTER]: [line(['d6e5', 'e1e2'], 0)],
 });
+
+// The standard start without Black's a-pawn: 1.e4 (the repertoire's first move) is legal, but this is not the opening.
+const NO_A_PAWN = 'rnbqkbnr/1ppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+function noAPawnE4() {
+  const game = new GameState('w', NO_A_PAWN);
+  const table = { [NO_A_PAWN]: [line(['e2e4', 'e7e5'], 30)], [new GameState('w', NO_A_PAWN, ['e2e4']).fen()]: [line(['e7e5', 'g1f3'], -30)] };
+  return { game, engine: new FakeEngine(table) };
+}
 
 async function knightBlunder(mode: 'play' | 'teach', over: Partial<CoachDeps> = {}) {
   const coach = new Coach(makeDeps(new FakeEngine(knightTable()), over));
@@ -134,6 +143,25 @@ describe('Coach.teachTurn', () => {
     expect(m.teach?.position).not.toContain("You're in");
   });
 
+  it('the first teaching turn as White from the start position gives the opening plan', async () => {
+    const coach = new Coach(makeDeps(new FakeEngine({})));
+    coach.setMode('teach');
+    const m = (await coach.teachTurn(new GameState('w')))!;
+    expect(m.teach?.inBook).toBe(true);
+    expect(m.teach!.position).toContain(rootPlan('w'));
+  });
+
+  it('a custom start position where the repertoire move is legal is still out of book', async () => {
+    const coach = new Coach(makeDeps(new FakeEngine({ [NO_A_PAWN]: [line(['g1f3', 'g8f6'], 30)] })));
+    coach.setMode('teach');
+    const m = (await coach.teachTurn(new GameState('w', NO_A_PAWN)))!;
+    expect(m.teach?.inBook).toBe(false);
+    expect(m.teach?.options.map((o) => o.uci)).toEqual(['g1f3']);
+    expect(m.teach?.position).not.toContain("You're in");
+    expect(m.teach?.position).not.toContain(rootPlan('w'));
+    expect(m.questions?.join(' ') ?? '').not.toContain(rootPlan('w'));
+  });
+
   it('a stale message cannot be opened after the user moves', async () => {
     const { game, coach } = teachSetup('guide');
     const m = (await coach.teachTurn(game))!;
@@ -199,6 +227,23 @@ describe('Coach teaching moves', () => {
     expect(text).not.toContain('?');
     expect(message!.explanation.whatHappened).toMatch(/^Bc4 /);
     expect(message!.explanation.whatHappened).not.toBe('Bc4 is a fine move here.');
+  });
+
+  it('a repertoire move from a custom start position is not called a book move', async () => {
+    const { game, engine } = noAPawnE4();
+    const coach = new Coach(makeDeps(engine));
+    coach.setMode('teach');
+    const { verdict, message } = await coach.onUserMove(game, game.play('e2e4'));
+    expect(verdict.flagged).toBe(false);
+    expect(message?.summary).toBe('✓ Good move.');
+    expect(message?.topKind).not.toBe('book');
+  });
+
+  it('play mode still calls that move a book move', async () => {
+    const { game, engine } = noAPawnE4();
+    const coach = new Coach(makeDeps(engine));
+    const { message } = await coach.onUserMove(game, game.play('e2e4'));
+    expect(message?.topKind).toBe('book');
   });
 
   it('play mode keeps its own feedback for the same move', async () => {
@@ -317,6 +362,17 @@ describe("Claude's wording of the teaching turn", () => {
     coach.setMode('teach');
     const m = (await coach.teachTurn(new GameState('w', fen)))!;
     expect(m.teach?.optionsOpen).toBe(false);
+    await flush();
+    expect(updates).toEqual([]);
+  });
+
+  it("a guide-mode rewrite that points at an option's square without naming the move is rejected", async () => {
+    // Nc3 (b1c3) is an option. This wording gets past moveLeaks but still points at the move.
+    const whatHappened = 'Your knight would be strong on c3.';
+    expect(moveLeaks(whatHappened)).toEqual([]);
+    const { game, coach, updates } = withExplain('guide', () => Promise.resolve({ whatHappened }));
+    const m = (await coach.teachTurn(game))!;
+    expect(m.teach?.options.map((o) => o.uci)).toContain('b1c3');
     await flush();
     expect(updates).toEqual([]);
   });

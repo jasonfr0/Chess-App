@@ -43,6 +43,11 @@ describe('positionText', () => {
     expect(text).toBe("You're in the Italian Game. Get your pieces out quickly.");
   });
 
+  it('gives the plan even when the line has no name yet (the first move as White)', () => {
+    const text = positionText({ ...base, fen: START, mode: 'guide', topic: 'opening', lineName: null, plan: 'Get your pieces out quickly.' });
+    expect(text).toBe('Get your pieces out quickly.');
+  });
+
   it('keeps at most two sentences', () => {
     const fen = 'rnbqkbnr/pppp1ppp/8/4p3/3N4/8/PPPPPPPP/RNBQKB1R w KQkq - 0 1';
     const text = positionText({ ...base, fen, mode: 'guide', topic: 'opening', lineName: 'Italian Game', plan: 'Get your pieces out quickly.' });

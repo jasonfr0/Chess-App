@@ -1138,6 +1138,28 @@ describe('GameScreen: Play to learn', () => {
     expect(await screen.findByRole('button', { name: 'Show me options' })).toBeInTheDocument();
   });
 
+  it('says the coach is looking while the teaching turn is prepared, and never in a play game', async () => {
+    const THINKING = 'The coach is looking at the position…';
+    const coach = teachingCoach();
+    let release = () => {};
+    const ready = new Promise<void>((r) => { release = r; });
+    coach.teachTurn = vi.fn(async () => { await ready; return guideTurn(); });
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('radio', { name: 'Play to learn' }));
+    fireEvent.click(screen.getByRole('button', { name: 'White' }));
+    expect(await screen.findByText(THINKING)).toBeInTheDocument();
+    release();
+    expect(await screen.findByRole('button', { name: 'Show me options' })).toBeInTheDocument();
+    expect(screen.queryByText(THINKING)).not.toBeInTheDocument();
+
+    cleanup();
+    const play = fakeCoach();
+    await setup(undefined, { coach: play });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(play.preMove).toHaveBeenCalled());
+    expect(screen.queryByText(THINKING)).not.toBeInTheDocument();
+  });
+
   it('default start is a play game', async () => {
     const coach = teachingCoach();
     await setup(undefined, { coach });

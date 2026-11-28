@@ -229,14 +229,16 @@ export class Coach {
       const lastMove = history.at(-1) ?? null;
       const fen = game.fen();
       const { userColor } = game;
-      const book = lookup(userColor, history.map((m) => m.san));
+      // A custom start position is never the repertoire's, even when its moves match the book.
+      const customStart = game.hasCustomStart();
+      const book = customStart ? null : lookup(userColor, history.map((m) => m.san));
       const area = areaOf(fen, history.length, book !== null);
       const epoch = this.epoch;
       const analysis = await this.analyse(fen).catch(() => null);
       if (epoch !== this.epoch || game.fen() !== fen || game.history().length !== history.length) return null;
 
-      const ctx: QuestionContext = { fen, lastMove, history, userColor, facts: positionFacts(fen), analysis, book };
-      const choice = teachOptions({ fen, userColor, sanHistory: history.map((m) => m.san), area, analysis });
+      const ctx: QuestionContext = { fen, lastMove, history, userColor, facts: positionFacts(fen), analysis, book, noPlan: customStart };
+      const choice = teachOptions({ fen, userColor, sanHistory: history.map((m) => m.san), area, analysis, customStart });
       const topic = topicOf({ inBook: choice.inBook, area, reasons: choice.bestReasons });
       const mode: TeachMode = choice.options.length === 0 ? 'show' : this.deps.teachModeFor(topic);
       const optionsOpen = mode === 'show';
@@ -277,14 +279,17 @@ export class Coach {
 
   /**
    * Claude may reword the position text only (option reasons stay the checked text). With the options
-   * closed it must name no move and no square of a piece the user could win. Dropped once the user
-   * moves, takes back or opens the options.
+   * closed it must name no move, point at no option (`revealsMove`), and name no square of a piece the
+   * user could win. Dropped once the user moves, takes back or opens the options.
    */
   private rewordTurn(turn: Turn, userColor: Color): void {
     const { message, fen } = turn;
     const teach = message.teach!;
     const winnable = positionFacts(fen).hanging.filter((h) => h.color !== userColor).map((h) => new RegExp(`\\b${h.square}\\b`, 'i'));
-    const safe = (t: string) => moveLeaks(t).length === 0 && !winnable.some((re) => re.test(t));
+    // The squares of the move on the board may be named; an option's destination may not, even without a move verb.
+    const seen = turn.lastMove ? [turn.lastMove.uci] : [];
+    const safe = (t: string) => moveLeaks(t).length === 0 && !winnable.some((re) => re.test(t))
+      && !teach.options.some((o) => revealsMove(t, o.san, o.uci, seen));
     this.publish(message, () => buildTeachPacket({ fen, position: teach.position, options: teach.options, optionsOpen: teach.optionsOpen }, this.deps.profile()),
       () => this.turn === turn && turn.message === message, {
         accept: (e) => teach.optionsOpen || safe(e.whatHappened),
@@ -353,7 +358,8 @@ export class Coach {
     const found = history.findIndex((m) => m.uci === move.uci && m.fenBefore === move.fenBefore);
     const index = found >= 0 ? found : history.length;
     const before = history.slice(0, index);
-    const bookHit = lookup(game.userColor, [...before.map((m) => m.san), move.san]);
+    // Teaching games never call a move from a custom start position a book move (Play keeps its behaviour).
+    const bookHit = teaching && game.hasCustomStart() ? null : lookup(game.userColor, [...before.map((m) => m.san), move.san]);
     const inBook = bookHit !== null;
     const stub = { verdict: stubVerdict(move.fenBefore, move, index, inBook), message: null };
     if (game.result() !== null) return stub;

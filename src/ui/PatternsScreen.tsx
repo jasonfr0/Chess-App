@@ -11,9 +11,10 @@ type Example = ThemeStat['examples'][number];
 
 const learned = (s: ThemeStat) => s.teachCount ?? 0;
 
-/** "×3"; with flagged moves from teaching games, "×3 in games · 2 while learning". */
+/** "×3"; with flagged moves from teaching games, "×3 in games · 2 while learning"; teaching games only, "2 while learning". */
 function countText(s: ThemeStat): string {
-  return learned(s) > 0 ? `×${s.count} in games · ${learned(s)} while learning` : `×${s.count}`;
+  if (learned(s) === 0) return `×${s.count}`;
+  return s.count === 0 ? `${learned(s)} while learning` : `×${s.count} in games · ${learned(s)} while learning`;
 }
 
 export function PatternsScreen({ profile }: Props) {

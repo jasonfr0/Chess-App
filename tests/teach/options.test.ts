@@ -24,6 +24,20 @@ describe('teachOptions', () => {
     expect(teachOptions({ fen, userColor: 'w', sanHistory: [], area: 'endgame', analysis: null })).toEqual({ inBook: false, options: [], bestReasons: null });
   });
 
+  it('a custom start position is never in book, even where the repertoire move is legal', () => {
+    // The standard start without Black's a-pawn: 1.e4 is legal, but this is not the repertoire's position.
+    const fen = 'rnbqkbnr/1ppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    expect(teachOptions({ fen, userColor: 'w', sanHistory: [], area: 'opening', analysis: null }).inBook).toBe(true);
+    const r = teachOptions({
+      fen, userColor: 'w', sanHistory: [], area: 'opening', customStart: true,
+      analysis: analysis(fen, [{ uci: ['g1f3', 'g8f6'], cp: 30, mate: null }]),
+    });
+    expect(r.inBook).toBe(false);
+    expect(r.options.map((o) => o.uci)).toEqual(['g1f3']);
+    expect(teachOptions({ fen, userColor: 'w', sanHistory: [], area: 'opening', customStart: true, analysis: null }))
+      .toEqual({ inBook: false, options: [], bestReasons: null });
+  });
+
   it('in the repertoire, the options are the book moves, main line first', () => {
     const r = teachOptions({ fen: START, userColor: 'w', sanHistory: [], area: 'opening', analysis: null });
     const nodes = bookReplies('w', []);

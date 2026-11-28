@@ -50,6 +50,19 @@ function renderPanel(message: CoachMessage, lastMove: CoachMessage | null = null
 }
 
 describe('TeachPanel', () => {
+  const THINKING = 'The coach is looking at the position…';
+  it('shows a muted thinking line while the turn is being prepared', () => {
+    const props = { lastMove: null, offline: false, onShowOptions: vi.fn(), onWatch: vi.fn() };
+    const { rerender } = render(<TeachPanel message={null} pending {...props} />);
+    const line = screen.getByText(THINKING);
+    expect(line).toHaveClass('muted');
+    expect(line.closest('.now')).not.toBeNull();
+    rerender(<TeachPanel message={teach('guide')} pending={false} {...props} />);
+    expect(screen.queryByText(THINKING)).not.toBeInTheDocument();
+    rerender(<TeachPanel message={null} {...props} />);
+    expect(screen.queryByText(THINKING)).not.toBeInTheDocument();
+  });
+
   it('lists options with reasons and Watch buttons', () => {
     const { onWatch } = renderPanel(teach('show'));
     expect(screen.getByText('Computer played')).toBeInTheDocument();

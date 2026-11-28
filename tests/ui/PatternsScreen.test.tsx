@@ -47,7 +47,8 @@ describe('PatternsScreen', () => {
     };
     render(<PatternsScreen profile={profile} />);
     expect(screen.queryByText(/No patterns yet/)).not.toBeInTheDocument();
-    expect(screen.getByText('×0 in games · 1 while learning')).toBeInTheDocument();
+    expect(screen.getByText('1 while learning')).toBeInTheDocument();
+    expect(screen.queryByText(/×0|in games/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Position from move 3' }));
     expect(screen.getByRole('region', { name: 'Example position' })).toBeInTheDocument();
   });

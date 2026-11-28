@@ -59,7 +59,11 @@ export interface TeachChoice {
   bestReasons: Reasons | null;
 }
 
-type Input = { fen: string; userColor: Color; sanHistory: string[]; area: Area; analysis: Analysis | null };
+type Input = {
+  fen: string; userColor: Color; sanHistory: string[]; area: Area; analysis: Analysis | null;
+  /** The game began from a custom position: its moves are never the repertoire's, whatever they are. */
+  customStart?: boolean;
+};
 
 const NONE: TeachChoice = { inBook: false, options: [], bestReasons: null };
 
@@ -145,11 +149,12 @@ function engineChoice(input: Input, analysis: Analysis): TeachChoice {
 
 /**
  * `analysis` null = the engine gave nothing: book options still work; out of book returns no options.
- * A position counts as in book only when at least one repertoire move is legal in it.
+ * A position counts as in book only when the game began from the standard start and at least one
+ * repertoire move is legal in it.
  */
 export function teachOptions(input: Input): TeachChoice {
   if (toMove(input.fen) !== input.userColor) return NONE;
-  const nodes = bookReplies(input.userColor, input.sanHistory);
+  const nodes = input.customStart ? [] : bookReplies(input.userColor, input.sanHistory);
   if (nodes.length > 0) {
     const book = bookChoice(input, nodes);
     // No listed move is legal here (a custom start position): this is not the repertoire's position.

@@ -290,6 +290,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
       {teaching && game && phase !== 'over' && phase !== 'setup' && !view.mistake && !viewing && !watching && (
         <TeachPanel
           message={message?.kind === 'teach' ? message : null}
+          pending={isUserTurn && message?.kind !== 'teach'}
           lastMove={view.lastMove}
           offline={coachOffline}
           onShowOptions={actions.showOptions}

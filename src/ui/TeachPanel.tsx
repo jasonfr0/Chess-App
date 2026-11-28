@@ -13,17 +13,21 @@ interface Props {
   onWatch: (index: number) => void;
   /** After Play on: what the mistake led to, when it happened. */
   consequence?: CoachMessage | null;
+  /** The user's turn is being analysed and its message has not arrived yet. */
+  pending?: boolean;
 }
 
 export const NO_OPTIONS = 'The coach has no checked options for this position. Play the move you think is best.';
+export const THINKING = 'The coach is looking at the position…';
 
 /**
  * A teaching game's coach panel: their move, the position and the good options (show mode), or the
  * questions and "Show me options" (guide mode). While the options are closed nothing of them is in the
  * page, not even hidden. No Play level decides what shows here.
  */
-export function TeachPanel({ message, lastMove, offline, onShowOptions, onWatch, consequence }: Props) {
-  if (!message && !lastMove && !consequence) return null;
+export function TeachPanel({ message, lastMove, offline, onShowOptions, onWatch, consequence, pending = false }: Props) {
+  const thinking = pending && !message;
+  if (!message && !lastMove && !consequence && !thinking) return null;
   const teach = message?.teach;
   const options = teach?.options ?? [];
   // Only a turn with options is offered to Claude for rewording.
@@ -53,6 +57,7 @@ export function TeachPanel({ message, lastMove, offline, onShowOptions, onWatch,
           </div>
         )}
         {message && <Turn message={message} onShowOptions={onShowOptions} onWatch={onWatch} />}
+        {thinking && <div className="now"><p className="muted">{THINKING}</p></div>}
       </div>
     </section>
   );

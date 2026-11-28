@@ -10,10 +10,12 @@ export class GameState {
   readonly userColor: Color;
   private chess: Chess;
   private played: PlayedMove[] = [];
+  private readonly customStart: boolean;
 
   constructor(userColor: Color, startFen?: string, moves: string[] = []) {
     this.userColor = userColor;
     this.chess = startFen ? new Chess(startFen) : new Chess();
+    this.customStart = this.chess.fen() !== new Chess().fen();
     for (const m of moves) this.play(m);
   }
 
@@ -21,6 +23,8 @@ export class GameState {
   turn(): Color { return this.chess.turn(); }
   history(): PlayedMove[] { return [...this.played]; }
   isUserTurn(): boolean { return this.turn() === this.userColor; }
+  /** True when the game began from a position other than the standard start (a ?fen= practice game). */
+  hasCustomStart(): boolean { return this.customStart; }
 
   legalMovesFrom(square: string): string[] {
     return this.chess
