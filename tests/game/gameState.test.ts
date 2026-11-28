@@ -101,3 +101,14 @@ describe('GameState serialization', () => {
     expect(new GameState('w', undefined, json.moves).fen()).toBe(g.fen());
   });
 });
+
+describe('GameState start position', () => {
+  it('knows when the game started from a custom position', () => {
+    expect(new GameState('w').hasCustomStart()).toBe(false);
+    expect(new GameState('w', START).hasCustomStart()).toBe(false);
+    expect(new GameState('b', 'rnbqkbnr/1ppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1').hasCustomStart()).toBe(true);
+    const g = new GameState('w', '4k3/8/8/8/8/8/8/4K3 w - - 0 1');
+    g.play('e1e2');
+    expect(g.hasCustomStart()).toBe(true);
+  });
+});

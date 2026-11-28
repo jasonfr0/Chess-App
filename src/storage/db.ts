@@ -1,6 +1,6 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import { z } from 'zod/v4';
-import type { Area, CoachLevel, Color, GameResult, ProfileData, Theme } from '../types';
+import type { Area, CoachLevel, Color, GameMode, GameResult, ProfileData, Theme } from '../types';
 import type { Verdict } from '../coach/classify';
 import { MODEL_IDS, type ModelId } from '../coach/claude';
 
@@ -21,6 +21,8 @@ export interface SavedGame {
   verdicts: Verdict[]; result: GameResult | null;
   /** user moves made with attack lines on / all user moves; absent in older games (= lines off) */
   attackLinesMoves?: number; userMoves?: number;
+  /** absent = 'play' */
+  mode?: GameMode;
 }
 
 export interface Db {
@@ -75,15 +77,26 @@ const gameSchema = z.object({
   verdicts: z.array(z.looseObject({})),
   attackLinesMoves: z.number().optional(),
   userMoves: z.number().optional(),
+  mode: z.enum(['play', 'teach']).optional(),
   result: z.object({
     winner: z.enum(['w', 'b']).nullable(),
     reason: z.enum(['checkmate', 'stalemate', 'repetition', 'fifty_move', 'insufficient', 'resign', 'timeout']),
   }).nullable(),
 });
+const exampleSchema = z.looseObject({ gameId: z.string(), ply: z.number(), fen: z.string() });
 const themeStatSchema = z.looseObject({
   count: z.number(),
   lastSeen: z.number(),
-  examples: z.array(z.looseObject({ gameId: z.string(), ply: z.number(), fen: z.string() })),
+  examples: z.array(exampleSchema),
+  teachCount: z.number().optional(),
+  teachExamples: z.array(exampleSchema).optional(),
+});
+const topicEnum = z.enum(['opening', 'safety', 'captures', 'checks', 'development', 'endgame', 'other']);
+const teachingSchema = z.object({
+  gamesFinished: z.number(),
+  topics: z.partialRecord(topicEnum, z.object({
+    mode: z.enum(['show', 'guide']), shown: z.number(), need: z.number(), recent: z.array(z.boolean()),
+  })),
 });
 const moveRecordSchema = z.looseObject({
   good: z.boolean(), flagged: z.boolean(), at: z.number(),
@@ -96,6 +109,7 @@ const profileSchema = z.looseObject({
   }),
   levels: z.record(areaEnum, levelEnum),
   levelChangedAt: z.partialRecord(areaEnum, z.number()).optional(),
+  teaching: teachingSchema.optional(),
   version: z.number().optional(), // absent in older backups
 });
 const backupSchema = z.object({

@@ -1,5 +1,5 @@
 import type { CoachMessage } from '../coach/coach';
-import type { Color, GameResult } from '../types';
+import type { Color, GameMode, GameResult } from '../types';
 
 const REASONS: Record<GameResult['reason'], string> = {
   checkmate: 'checkmate', stalemate: 'stalemate', repetition: 'repetition', fifty_move: 'the fifty-move rule',
@@ -19,13 +19,16 @@ interface Props {
   clockSuggestion: boolean;
   onTurnOnClock: () => void;
   onNewGame: () => void;
+  /** A teaching game's recap is titled "Teaching game". */
+  mode?: GameMode;
 }
 
-export function RecapCard({ result, userColor, recap, levelNotes, clockSuggestion, onTurnOnClock, onNewGame }: Props) {
+export function RecapCard({ result, userColor, recap, levelNotes, clockSuggestion, onTurnOnClock, onNewGame, mode = 'play' }: Props) {
   const e = recap?.explanation;
   return (
     <section className="card recap" aria-label="Game over">
       <h2>{headline(result, userColor)}</h2>
+      {e && mode === 'teach' && <h3>Teaching game</h3>}
       {e && (
         <ul className="recap-lines">
           <li>{e.whatHappened}</li>

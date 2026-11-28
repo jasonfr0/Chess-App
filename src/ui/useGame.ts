@@ -7,16 +7,18 @@ import { GameState } from '../game/gameState';
 import { adjustOpponentRating, selectOpponentMove } from '../opponent/selectMove';
 import { areaOf } from '../coach/classify';
 import { lookup } from '../openings/repertoire';
-import { levelFor, recordMove } from '../profile/profile';
+import { levelFor, recordMove, recordTeachTheme } from '../profile/profile';
 import { levelChangeText, reviewLevels, suggestClock } from '../profile/weaning';
 import { suggestLinesOff } from '../profile/attackLines';
+import { playGames } from '../profile/games';
 import type { Db, SavedGame, Settings } from '../storage/db';
-import type { Analysis, CoachLevel, Color, GameResult, ProfileData } from '../types';
+import { finishGame, recordTurn, topicChanges } from '../teach/fade';
+import type { Analysis, CoachLevel, Color, GameMode, GameResult, ProfileData, TeachMode, TeachState, TeachTopic } from '../types';
 
 export type CoachApi = Pick<
   Coach,
   'onUpdate' | 'cancelPending' | 'preMove' | 'onUserMove' | 'explainTopMove' | 'hintStep' | 'showMe' | 'playOnReveal'
-  | 'playOn' | 'checkConsequence' | 'recap'
+  | 'playOn' | 'checkConsequence' | 'recap' | 'setMode' | 'teachTurn' | 'openOptions' | 'teachRecap'
 >;
 
 export interface GameDeps {
@@ -43,6 +45,8 @@ export type Phase = 'loading' | 'setup' | 'user' | 'checking' | 'opponent' | 'mi
 
 export interface GameView {
   phase: Phase;
+  /** Play, or a teaching game ("Play to learn"), which never counts toward the assessment. 'play' before a game. */
+  mode: GameMode;
   game: GameState | null;
   /** Latest pre-move coaching for the current position. */
   coachMsg: CoachMessage | null;
@@ -99,7 +103,7 @@ export interface GameView {
 }
 
 export interface GameActions {
-  start(choice: Color | 'random'): void;
+  start(choice: Color | 'random', mode?: GameMode): void;
   /** Returns true if the move was played. */
   userMove(uci: string): boolean;
   choosePromotion(piece: 'q' | 'r' | 'b' | 'n'): void;
@@ -118,6 +122,10 @@ export interface GameActions {
   stepWatch(delta: -1 | 1): void;
   /** "Back to the card". */
   closeWatch(): void;
+  /** Teaching game, guide mode: "Show me options" for this turn (counts as a miss for the fade). */
+  showOptions(): void;
+  /** Teaching game: plays options[index]'s line in the watch player. */
+  watchOption(index: number): void;
   /** The board showed attack lines in this position during the user's decision. */
   linesShown(fen: string): void;
   resign(): void;
@@ -142,12 +150,23 @@ const BOOK_CHANCE = 0.7;
 const CLOCK_TICK_MS = 200;
 
 const INITIAL: GameView = {
-  phase: 'loading', game: null, coachMsg: null, consequence: null, mistake: null, hints: null, hintHighlight: [],
+  phase: 'loading', mode: 'play', game: null, coachMsg: null, consequence: null, mistake: null, hints: null, hintHighlight: [],
   promotion: null, clock: null, result: null, recap: null, levelNotes: [], clockSuggestion: false, linesOffSuggestion: false,
   lastMove: null, lastMoveOpen: false, questionsShownFor: null, nudgeFor: null, betterShownFor: null,
   viewPly: null, newMoveWhileViewing: false, watching: null, watchedLine: null, watchedTakeBackFor: null, reveal: null, showMeFor: null,
   linesShownFor: null,
 };
+
+/** The teaching turn message shown for a position: what the fade counts the user's first move there as. */
+interface TeachTurnShown { fen: string; topic: TeachTopic; mode: TeachMode; options: number }
+/** Per teaching game: the fade state at load, topics seen, positions already counted, where options were opened. */
+interface TeachGame {
+  atStart: TeachState | undefined; topics: TeachTopic[]; countedFens: Set<string>;
+  optionsOpenedFor: string | null; turn: TeachTurnShown | null;
+}
+const newTeachGame = (atStart: TeachState | undefined): TeachGame => (
+  { atStart, topics: [], countedFens: new Set(), optionsOpenedFor: null, turn: null }
+);
 
 const opposite = (c: Color): Color => (c === 'w' ? 'b' : 'w');
 const ignore = () => {};
@@ -175,7 +194,7 @@ export function levelAt(game: GameState, profile: ProfileData, settings: Pick<Se
 
 /** Score of the user's last five finished games: win 1, draw 0.5. */
 function lastFiveScore(games: SavedGame[]): number {
-  return games
+  return playGames(games)
     .filter((g) => g.result !== null)
     .slice(-5)
     .reduce((sum, g) => sum + (g.result!.winner === null ? 0.5 : g.result!.winner === g.userColor ? 1 : 0), 0);
@@ -209,6 +228,9 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     { id: '', startedAt: 0, verdicts: [], userMoves: 0, attackLinesMoves: 0, lastWithLines: false },
   );
 
+  const teach = useRef<TeachGame>(newTeachGame(undefined));
+  const teaching = () => view.current.mode === 'teach';
+
   const setProfile = (p: ProfileData) => { profile.current = p; d.current.onProfile(p); };
   const setSettings = (s: Settings) => { settings.current = s; d.current.onSettings(s); };
 
@@ -218,7 +240,9 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const { id, startedAt, verdicts, userMoves, attackLinesMoves } = meta.current;
     const record: SavedGame = {
       id, startedAt, userColor: game.userColor, moves: game.toJSON().moves, verdicts: [...verdicts],
-      result: view.current.result, userMoves, attackLinesMoves,
+      result: view.current.result,
+      // Teaching games track no move counts (they feed no suggestion).
+      ...(teaching() ? { mode: 'teach' as const } : { userMoves, attackLinesMoves }),
     };
     d.current.db.saveGame(record).catch(ignore);
   };
@@ -232,6 +256,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   };
 
   const runPreMove = (game: GameState, force = false) => {
+    if (teaching()) { runTeachTurn(game); return; }
     const g = gen.current;
     const fen = game.fen();
     d.current.coach.preMove(game, force ? { force } : undefined).then((m) => {
@@ -239,17 +264,73 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     }, ignore);
   };
 
+  /** Teaching games: the turn message (options, topic, mode) in place of pre-move coaching. */
+  const runTeachTurn = (game: GameState) => {
+    const g = gen.current;
+    const fen = game.fen();
+    d.current.coach.teachTurn(game).then((m) => {
+      if (!m?.teach || g !== gen.current || game.fen() !== fen) return;
+      const { topic, mode, options } = m.teach;
+      const t = teach.current;
+      t.turn = { fen, topic, mode, options: options.length };
+      if (!t.topics.includes(topic)) t.topics.push(topic);
+      set({ coachMsg: m });
+    }, ignore);
+  };
+
+  /**
+   * Teaching games: a flagged move adds to the teaching theme count only, and the first analysed move
+   * from a position whose turn had options counts once toward the fade (a retry after take-back does not).
+   */
+  const recordTeachMove = (verdict: Verdict, fenBefore: string, ctx: { gameId: string; ply: number; at: number }) => {
+    let p = recordTeachTheme(profile.current, verdict, { ...ctx, fen: fenBefore });
+    const t = teach.current;
+    const turn = t.turn;
+    // Only the first attempt from a position decides, counted or not (e.g. played before the turn showed).
+    const first = !t.countedFens.has(fenBefore);
+    t.countedFens.add(fenBefore);
+    if (first && turn?.fen === fenBefore && turn.options > 0) {
+      p = {
+        ...p,
+        teaching: recordTurn(p.teaching, turn.topic, { mode: turn.mode, flagged: verdict.flagged, openedOptions: t.optionsOpenedFor === fenBefore }),
+      };
+    }
+    if (p !== profile.current) setProfile(p);
+  };
+
+  /**
+   * Teaching games end with the teaching recap and the fade's game count; nothing of the assessment runs.
+   * Applied at once, before any await, so a game started right after sees the finished count.
+   */
+  const endTeachGame = (tg: TeachGame, verdicts: Verdict[]) => {
+    const teachingState = finishGame(profile.current.teaching);
+    const changes = topicChanges(tg.atStart, teachingState);
+    setProfile({ ...profile.current, teaching: teachingState });
+    set({
+      recap: d.current.coach.teachRecap(verdicts, tg.topics, changes),
+      levelNotes: [], clockSuggestion: false, linesOffSuggestion: false,
+    });
+  };
+
   const endGame = async (result: GameResult) => {
     const game = view.current.game;
     if (!game || view.current.phase === 'over') return;
     gen.current++;
+    // The finished game's mode and data, fixed now: New game or a new start during the awaits below
+    // replaces the view, the mode and the per-game refs.
+    const tg = teaching() ? teach.current : null;
+    const { verdicts } = meta.current;
     d.current.coach.cancelPending();
     set({ phase: 'over', result, promotion: null, mistake: null, hints: null, hintHighlight: [], watching: null, watchedLine: null });
     save();
     const { db, coach, startFen } = d.current;
+    /** Still showing the finished game: only then is its recap and its suggestions written to the view. */
+    const current = () => view.current.game === game;
+    if (tg) endTeachGame(tg, verdicts);
     if (!startFen) await db.setCurrentGame(null).catch(ignore);
+    if (tg) { if (!startFen) d.current.onGameListChanged?.(); return; }
 
-    const recap = coach.recap(game, meta.current.verdicts);
+    const recap = coach.recap(game, verdicts);
     const review = reviewLevels(profile.current);
     if (review.changes.length > 0) setProfile(review.profile);
 
@@ -258,6 +339,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     if (!startFen) d.current.onGameListChanged?.();
     const rating = adjustOpponentRating(settings.current.opponentRating, lastFiveScore(games));
     if (rating !== settings.current.opponentRating) setSettings({ ...settings.current, opponentRating: rating });
+    if (!current()) return;
 
     // A manual override pins an area's level, so changes underneath it are not announced.
     const { levelOverride } = settings.current;
@@ -337,9 +419,9 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     // An unanalysed verdict (engine failure) is no evidence either way: it is neither shown nor recorded.
     if (res && res.verdict.analysed !== false) {
       meta.current.verdicts.push(res.verdict);
-      setProfile(recordMove(profile.current, res.verdict, {
-        gameId: meta.current.id || 'test', ply, fen: move.fenBefore, at: Date.now(), assisted,
-      }));
+      const gameId = meta.current.id || 'test';
+      if (teaching()) recordTeachMove(res.verdict, move.fenBefore, { gameId, ply, at: Date.now() });
+      else setProfile(recordMove(profile.current, res.verdict, { gameId, ply, fen: move.fenBefore, at: Date.now(), assisted }));
       save();
     }
     const result = game.result();
@@ -353,15 +435,21 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     void opponentTurn();
   };
 
-  const load = (game: GameState, id: string, startedAt: number, verdicts: Verdict[], counts?: Pick<SavedGame, 'userMoves' | 'attackLinesMoves'>) => {
+  const load = (
+    game: GameState, id: string, startedAt: number, verdicts: Verdict[],
+    saved?: Pick<SavedGame, 'userMoves' | 'attackLinesMoves' | 'mode'>,
+  ) => {
+    const mode = saved?.mode ?? 'play';
+    d.current.coach.setMode(mode);
+    teach.current = newTeachGame(profile.current.teaching);
     meta.current = {
       id, startedAt, verdicts: [...verdicts],
-      userMoves: counts?.userMoves ?? 0, attackLinesMoves: counts?.attackLinesMoves ?? 0, lastWithLines: false,
+      userMoves: saved?.userMoves ?? 0, attackLinesMoves: saved?.attackLinesMoves ?? 0, lastWithLines: false,
     };
     const minutes = settings.current.clockMinutes;
     set({
-      ...INITIAL, phase: 'loading', game,
-      clock: minutes ? { w: minutes * 60_000, b: minutes * 60_000 } : null,
+      ...INITIAL, phase: 'loading', mode, game,
+      clock: minutes && mode === 'play' ? { w: minutes * 60_000, b: minutes * 60_000 } : null,
     });
     afterPositionChange();
   };
@@ -391,7 +479,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   // ever replaces its own slot: a late post_move upgrade must not touch "Now", nor the reverse.
   useEffect(() => subscribe(deps.coach, (m) => {
     const v = view.current;
-    if (m.kind === 'pre_move' && v.coachMsg?.id === m.id) set({ coachMsg: m });
+    if ((m.kind === 'pre_move' || m.kind === 'teach') && v.coachMsg?.id === m.id) set({ coachMsg: m });
     if (m.kind === 'post_move' && v.lastMove?.id === m.id) set({ lastMove: m });
     if (m.kind === 'post_move' && v.reveal?.id === m.id) set({ reveal: m });
     if (m.kind === 'mistake' && v.mistake?.id === m.id) set({ mistake: m });
@@ -417,7 +505,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
   }, [ticking]);
 
   const actions: GameActions = {
-    start(choice) {
+    start(choice, mode = 'play') {
       stopWork();
       const color: Color = choice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : choice;
       const { db, startFen } = d.current;
@@ -425,12 +513,12 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const id = `game-${Date.now()}`;
       const startedAt = Date.now();
       if (!startFen) {
-        db.saveGame({ id, startedAt, userColor: color, moves: [], verdicts: [], result: null })
+        db.saveGame({ id, startedAt, userColor: color, moves: [], verdicts: [], result: null, ...(mode === 'teach' ? { mode } : {}) })
           .then(() => db.setCurrentGame(id))
           .then(() => d.current.onGameListChanged?.())
           .catch(ignore);
       }
-      load(game, id, startedAt, []);
+      load(game, id, startedAt, [], { mode });
     },
 
     userMove(uci) {
@@ -459,13 +547,17 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const followsWatched = next?.by === 'user' && next.uci === uci;
       // After watching, then taking back: a retry that plays any user move the line showed.
       const retriesWatched = v.watchedTakeBackFor?.fen === fen && v.watchedTakeBackFor.ucis.includes(uci);
-      const assisted = nudged || shown || playsShownBetter || withLines || followsWatched || retriesWatched;
+      // Teaching games keep no assisted flags or move counts: nothing of them reaches the assessment.
+      const inTeach = v.mode === 'teach';
+      const assisted = !inTeach && (nudged || shown || playsShownBetter || withLines || followsWatched || retriesWatched);
       let move;
       try { move = game.play(uci); } catch { return false; }
       followWatchedLine(game);
-      meta.current.userMoves++;
-      if (withLines) meta.current.attackLinesMoves++;
-      meta.current.lastWithLines = withLines;
+      if (!inTeach) {
+        meta.current.userMoves++;
+        if (withLines) meta.current.attackLinesMoves++;
+        meta.current.lastWithLines = withLines;
+      }
       // Only the latest move's feedback is kept: the previous one goes now.
       set({
         phase: 'checking', coachMsg: null, consequence: null, hints: null, hintHighlight: [], lastMove: null, lastMoveOpen: false,
@@ -489,8 +581,15 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const game = view.current.game;
       if (!game || view.current.phase !== 'mistake') return;
       stopWork();
-      const watched = watchedThis.current && view.current.mistake?.watch ? view.current.mistake.watch : null;
       game.takeBackUserMove();
+      if (teaching()) {
+        // No hint ladder in teaching games: the turn message (with its options) is shown again.
+        save();
+        set({ phase: 'user', mistake: null, hints: null, hintHighlight: [], watching: null, reveal: null });
+        runPreMove(game);
+        return;
+      }
+      const watched = watchedThis.current && view.current.mistake?.watch ? view.current.mistake.watch : null;
       // The taken-back move no longer counts toward this game's moves.
       meta.current.userMoves = Math.max(0, meta.current.userMoves - 1);
       if (meta.current.lastWithLines) meta.current.attackLinesMoves = Math.max(0, meta.current.attackLinesMoves - 1);
@@ -509,6 +608,12 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       if (v.phase !== 'mistake' || !game) return;
       const { coach } = d.current;
       coach.playOn();
+      // The teaching mistake card already showed the better move: no second reveal, no watched-line rule.
+      if (teaching()) {
+        set({ mistake: null, watching: null });
+        void opponentTurn();
+        return;
+      }
       const reveal = coach.playOnReveal();
       const watched = watchedThis.current && v.mistake?.watch ? v.mistake.watch : null;
       watchStart.current = game.history().length;
@@ -522,14 +627,14 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
 
     hint(step) {
       const hints = view.current.hints;
-      if (!hints || hints.length !== step - 1) return;
+      if (!hints || hints.length !== step - 1 || teaching()) return;
       const { text, highlight } = d.current.coach.hintStep(step);
       if (text) set({ hints: [...hints, text], hintHighlight: highlight });
     },
 
     showMe() {
       const { hints, game, phase, reveal } = view.current;
-      if (!hints || !game || phase !== 'user' || reveal) return; // once per reveal
+      if (!hints || !game || phase !== 'user' || reveal || teaching()) return; // once per reveal
       const message = d.current.coach.showMe();
       if (!message) return;
       // The reveal's green arrow replaces any Hint 2 ring.
@@ -567,6 +672,22 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     },
 
     closeWatch() { set({ watching: null }); },
+
+    showOptions() {
+      const { game, coachMsg, phase } = view.current;
+      if (!game || phase !== 'user' || !coachMsg?.teach || coachMsg.teach.optionsOpen) return;
+      const message = d.current.coach.openOptions(coachMsg.id);
+      if (!message) return;
+      teach.current.optionsOpenedFor = game.fen();
+      set({ coachMsg: message });
+    },
+
+    watchOption(index) {
+      const { coachMsg, phase } = view.current;
+      const plies = coachMsg?.teach?.optionsOpen ? coachMsg.teach.options[index]?.watch : null;
+      if (phase !== 'user' || !plies?.length) return;
+      set({ watching: { plies, index: 0 }, viewPly: null, newMoveWhileViewing: false });
+    },
 
     linesShown(fen) {
       if (view.current.linesShownFor !== fen) view.current = { ...view.current, linesShownFor: fen }; // no re-render needed
@@ -616,7 +737,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
 
     askCoach() {
       const { game, phase } = view.current;
-      if (game && phase === 'user') runPreMove(game, true);
+      if (game && phase === 'user' && !teaching()) runPreMove(game, true);
     },
   };
 

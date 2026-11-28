@@ -74,3 +74,21 @@ describe('MistakeCard', () => {
     expect(screen.getByRole('button', { name: 'Take it back' })).not.toHaveAttribute('aria-describedby');
   });
 });
+
+describe('MistakeCard in a teaching game', () => {
+  it('teaching card shows the better move and no Show me', () => {
+    const m = message('take_back');
+    const teaching: CoachMessage = {
+      ...m, reveal: true, watch,
+      explanation: { ...m.explanation, better: 'd4 was better: it takes the centre and keeps your bishop safe.' },
+    };
+    render(<MistakeCard message={teaching} onTakeBack={() => {}} onPlayOn={() => {}} onWatch={() => {}} />);
+    expect(screen.getByText('Better move')).toBeInTheDocument();
+    expect(screen.getByText('d4 was better: it takes the centre and keeps your bishop safe.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show me' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hint/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take it back' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Play on' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '▶ Watch what happens' })).toBeInTheDocument();
+  });
+});

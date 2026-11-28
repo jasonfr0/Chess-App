@@ -49,4 +49,7 @@ describe('suggestLinesOff', () => {
     expect(suggestLinesOff([g(1), g(2), g(3, { attackLinesMoves: undefined, userMoves: undefined })])).toBe(false);
     expect(suggestLinesOff([g(1), g(2), g(3, { userMoves: 9, attackLinesMoves: 9 })])).toBe(false);
   });
+  it('ignores teaching games', () => {
+    expect(suggestLinesOff([g(1), g(2), g(3), g(4, { mode: 'teach', attackLinesMoves: 0, userMoves: 3 })])).toBe(true);
+  });
 });

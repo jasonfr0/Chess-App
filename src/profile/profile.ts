@@ -58,6 +58,25 @@ export function recordMove(
   return { ...p, themes, moves, ...(levelChangedAt ? { levelChangedAt } : {}) };
 }
 
+/** Adds a flagged teaching-game verdict to the theme's teachCount / teachExamples (last 10). Touches nothing else. */
+export function recordTeachTheme(
+  p: ProfileData, v: Verdict, ctx: { gameId: string; ply: number; fen: string; at: number },
+): ProfileData {
+  if (!v.flagged) return p;
+  const old = p.themes[v.theme];
+  return {
+    ...p,
+    themes: {
+      ...p.themes,
+      [v.theme]: {
+        ...old,
+        teachCount: (old.teachCount ?? 0) + 1,
+        teachExamples: [...(old.teachExamples ?? []), { gameId: ctx.gameId, ply: ctx.ply, fen: ctx.fen }].slice(-MAX_EXAMPLES),
+      },
+    },
+  };
+}
+
 /** Top 3 themes by count among themes seen in the last 30 days. `gamesPlayed` is not stored in the profile; callers pass it. */
 export function summary(p: ProfileData, now: number = Date.now(), gamesPlayed = 0): ProfileSummary {
   const topThemes = (Object.entries(p.themes) as [Theme, ProfileData['themes'][Theme]][])

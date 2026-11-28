@@ -4,8 +4,9 @@ import { Chess } from 'chess.js';
 import type { Arrow, CoachMessage } from '../coach/coach';
 import { attackMap } from '../coach/attacks';
 import { SUGGEST_LINES_OFF } from '../profile/attackLines';
-import type { Color } from '../types';
+import type { Color, GameMode } from '../types';
 import { CoachPanel } from './CoachPanel';
+import { TeachPanel } from './TeachPanel';
 import { HistoryBar, ViewingCard, viewingLabel, viewingStatus } from './HistoryBar';
 import { WatchPlayer } from './WatchPlayer';
 import { MistakeCard } from './MistakeCard';
@@ -92,13 +93,25 @@ function coachArrows(
   return [...blue, ...green];
 }
 
+/** A teaching game's arrows: the mistake card's, else the turn message's (blue, plus green while the options are open). */
+function teachArrows(mistake: CoachMessage | null, now: CoachMessage | null): Arrow[] {
+  if (mistake) return mistake.arrows;
+  return now?.kind === 'teach' ? now.arrows : [];
+}
+
+export const TEACH_LABEL = "Teaching game · doesn't count toward your level";
+export const TEACH_NOTE = "The coach shows you good moves before you play. These games don't count toward your level.";
+const GAME_TYPES: { mode: GameMode; label: string }[] = [{ mode: 'play', label: 'Play' }, { mode: 'teach', label: 'Play to learn' }];
+
 const toBoard = (arrows: Arrow[]): BoardArrow[] =>
   arrows.map((a) => ({ startSquare: a.from, endSquare: a.to, color: ARROW_COLORS[a.color] }));
 
 export function GameScreen({ coachOffline, ...deps }: Props) {
   const [view, actions] = useGame(deps);
   const [selected, setSelected] = useState<string | null>(null);
+  const [gameType, setGameType] = useState<GameMode>('play');
   const { game, phase, watching, viewPly } = view;
+  const teaching = view.mode === 'teach';
   const fen = game?.fen();
   const history = game?.history() ?? [];
   const viewing = viewPly !== null && viewPly >= -1 && viewPly < history.length && history.length > 0;
@@ -119,7 +132,9 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
   // History view and the watch player show nothing from the live position; the watch player shows its ply's move.
   const shownArrows: Arrow[] = watchPly
     ? [{ from: watchPly.uci.slice(0, 2), to: watchPly.uci.slice(2, 4), color: watchPly.by === 'opponent' ? 'red' : 'blue' }]
-    : viewing ? [] : coachArrows(view.mistake, message, view.lastMove, showBetter, shownMe);
+    : viewing ? []
+    : teaching ? teachArrows(view.mistake, message)
+    : coachArrows(view.mistake, message, view.lastMove, showBetter, shownMe);
 
   // Rings: the revealed nudge's squares (its position only) and the latest revealed hint's.
   const nudgeRings = fen && view.nudgeFor === fen && message?.nudge ? message.nudgeHighlight ?? [] : [];
@@ -178,6 +193,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
 
   return (
     <div className="game">
+      {teaching && game && <p className="teach-label">{TEACH_LABEL}</p>}
       {clockRow(opponentColor, 'Opponent')}
       <div className="board" data-fen={boardFen ?? ''} data-arrows={arrowNames.join(',')}
         data-squares={deco.marks.join(' ')}
@@ -213,11 +229,22 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
 
       {phase === 'setup' && (
         <section className="card setup" aria-label="New game">
+          <div className="game-type" role="radiogroup" aria-label="Game type">
+            {GAME_TYPES.map(({ mode, label }) => (
+              <button
+                key={mode} type="button" role="radio" aria-checked={gameType === mode}
+                className={gameType === mode ? 'selected' : ''} onClick={() => setGameType(mode)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {gameType === 'teach' && <p className="muted">{TEACH_NOTE}</p>}
           <h2>New game: play as</h2>
           <div className="actions">
-            <button type="button" className="primary" onClick={() => actions.start('w')}>White</button>
-            <button type="button" className="primary" onClick={() => actions.start('b')}>Black</button>
-            <button type="button" onClick={() => actions.start('random')}>Random</button>
+            <button type="button" className="primary" onClick={() => actions.start('w', gameType)}>White</button>
+            <button type="button" className="primary" onClick={() => actions.start('b', gameType)}>Black</button>
+            <button type="button" onClick={() => actions.start('random', gameType)}>Random</button>
           </div>
         </section>
       )}
@@ -234,6 +261,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
             actions.dismissClockSuggestion();
           }}
           onNewGame={actions.newGame}
+          mode={view.mode}
         />
       )}
 
@@ -249,14 +277,29 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
       )}
 
       {watching && (
-        <WatchPlayer plies={watching.plies} index={watching.index} onStep={actions.stepWatch} onClose={actions.closeWatch} />
+        <WatchPlayer
+          plies={watching.plies} index={watching.index} onStep={actions.stepWatch} onClose={actions.closeWatch}
+          closeLabel={teaching && !view.mistake ? 'Back to the options' : undefined}
+        />
       )}
 
       {view.mistake && !viewing && !watching && (
         <MistakeCard message={view.mistake} onTakeBack={actions.takeBack} onPlayOn={actions.playOn} onWatch={actions.watch} />
       )}
 
-      {game && phase !== 'over' && phase !== 'setup' && !view.mistake && !viewing && (
+      {teaching && game && phase !== 'over' && phase !== 'setup' && !view.mistake && !viewing && !watching && (
+        <TeachPanel
+          message={message?.kind === 'teach' ? message : null}
+          pending={isUserTurn && message?.kind !== 'teach'}
+          lastMove={view.lastMove}
+          offline={coachOffline}
+          onShowOptions={actions.showOptions}
+          onWatch={actions.watchOption}
+          consequence={view.consequence}
+        />
+      )}
+
+      {!teaching && game && phase !== 'over' && phase !== 'setup' && !view.mistake && !viewing && (
         <CoachPanel
           message={message}
           lastMove={view.lastMove}

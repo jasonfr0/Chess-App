@@ -3,7 +3,9 @@ import { Coach } from '../coach/coach';
 import { createExplainer } from '../coach/claude';
 import { createEngine, type Engine } from '../engine/engine';
 import { RESET_NOTICE, levelFor, migrateProfile, summary } from '../profile/profile';
+import { playGames } from '../profile/games';
 import { openDb, type Db, type Settings } from '../storage/db';
+import { modeFor } from '../teach/fade';
 import type { ProfileData } from '../types';
 import { GameScreen } from './GameScreen';
 import { PatternsScreen } from './PatternsScreen';
@@ -60,7 +62,7 @@ export function App() {
       }
       settingsRef.current = s;
       profileRef.current = p;
-      gamesCount.current = games.length;
+      gamesCount.current = playGames(games).length;
       const engine = createEngine();
       const coach = new Coach({
         engine,
@@ -68,6 +70,7 @@ export function App() {
         levelFor: (a) => levelFor(profileRef.current!, settingsRef.current!, a),
         profile: () => summary(profileRef.current!, Date.now(), gamesCount.current),
         themeCount: (t) => profileRef.current!.themes[t].count,
+        teachModeFor: (t) => modeFor(profileRef.current!.teaching, t),
       });
       setSettingsState(s);
       setProfileState(p);
@@ -93,7 +96,7 @@ export function App() {
   };
   // The games count (for Claude's profile summary) only changes when a game starts or ends.
   const onGameListChanged = () => {
-    db.listGames().then((g) => { gamesCount.current = g.length; }, () => {});
+    db.listGames().then((g) => { gamesCount.current = playGames(g).length; }, () => {});
   };
 
   return (

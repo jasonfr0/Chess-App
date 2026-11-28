@@ -11,6 +11,8 @@ import { lineScore } from './classify';
 export interface QuestionContext {
   fen: string; lastMove: PlayedMove | null; history: PlayedMove[];
   userColor: Color; facts: PositionFacts; analysis: Analysis | null; book: BookHit | null;
+  /** Teaching games from a custom start position: not the repertoire's opening, so no opening plan. */
+  noPlan?: boolean;
 }
 /**
  * Before-move coaching: what their move did, questions to think about, one optional hint. None names a move.
@@ -164,7 +166,8 @@ function forkItem(ctx: QuestionContext): Item | null {
 }
 
 /** The opening plan text for this position, per the repertoire. */
-function planText(ctx: QuestionContext): string | null {
+export function planText(ctx: QuestionContext): string | null {
+  if (ctx.noPlan) return null;
   if (ctx.book) return ctx.book.node.plan ?? null;
   if (ctx.history.length === 0 && ctx.userColor === 'w') return rootPlan('w');
   const userMoves = ctx.history.filter((m) => m.color === ctx.userColor).length;
