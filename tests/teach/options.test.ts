@@ -9,6 +9,18 @@ const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const analysis = (fen: string, lines: EngineLine[]): Analysis => ({ fen, depth: 14, lines });
 
 describe('teachOptions', () => {
+  it('a custom start position where no repertoire move is legal is out of book', () => {
+    const fen = '4k3/8/3p4/8/8/5N2/8/4K3 w - - 0 1';
+    expect(bookReplies('w', []).length).toBeGreaterThan(0);
+    const r = teachOptions({
+      fen, userColor: 'w', sanHistory: [], area: 'endgame',
+      analysis: analysis(fen, [{ uci: ['e1e2', 'e8e7'], cp: 0, mate: null }]),
+    });
+    expect(r.inBook).toBe(false);
+    expect(r.options.map((o) => o.uci)).toEqual(['e1e2']);
+    expect(teachOptions({ fen, userColor: 'w', sanHistory: [], area: 'endgame', analysis: null })).toEqual({ inBook: false, options: [], bestReasons: null });
+  });
+
   it('in the repertoire, the options are the book moves, main line first', () => {
     const r = teachOptions({ fen: START, userColor: 'w', sanHistory: [], area: 'opening', analysis: null });
     const nodes = bookReplies('w', []);

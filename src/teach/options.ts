@@ -128,10 +128,17 @@ function engineChoice(input: Input, analysis: Analysis): TeachChoice {
   return { inBook: false, options, bestReasons };
 }
 
-/** `analysis` null = the engine gave nothing: book options still work; out of book returns no options. */
+/**
+ * `analysis` null = the engine gave nothing: book options still work; out of book returns no options.
+ * A position counts as in book only when at least one repertoire move is legal in it.
+ */
 export function teachOptions(input: Input): TeachChoice {
   if (toMove(input.fen) !== input.userColor) return NONE;
   const nodes = bookReplies(input.userColor, input.sanHistory);
-  if (nodes.length > 0) return bookChoice(input, nodes);
+  if (nodes.length > 0) {
+    const book = bookChoice(input, nodes);
+    // No listed move is legal here (a custom start position): this is not the repertoire's position.
+    if (book.options.length > 0) return book;
+  }
   return input.analysis ? engineChoice(input, input.analysis) : NONE;
 }

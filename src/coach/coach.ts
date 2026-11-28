@@ -20,7 +20,7 @@ import { postMoveTemplate, revealTemplate, topMoveKind } from './postMove';
 import type { PostMoveContext, RevealContext, TopKind } from './postMove';
 import { watchLine } from './watch';
 import type { WatchPly } from './watch';
-import { deriveReasons } from './reasons';
+import { deriveReasons, reasonText } from './reasons';
 import type { Reasons } from './reasons';
 import { buildPacket, buildRevealPacket } from './claude';
 import type { FactPacket } from './claude';
@@ -191,8 +191,8 @@ export class Coach {
   private lastMistake: Mistake | null = null;
   private tracker: Tracker | null = null;
   private mode: GameMode = 'play';
-  /** The latest teach message and the move it followed, until the next user move or cancel. */
-  private turn: { message: CoachMessage; lastMove: PlayedMove | null } | null = null;
+  /** The latest teach message, its position and the move it followed, until the next user move or cancel. */
+  private turn: { message: CoachMessage; fen: string; lastMove: PlayedMove | null } | null = null;
 
   constructor(private deps: CoachDeps) {}
 
@@ -239,7 +239,11 @@ export class Coach {
       const topic = topicOf({ inBook: choice.inBook, area, reasons: choice.bestReasons });
       const mode: TeachMode = choice.options.length === 0 ? 'show' : this.deps.teachModeFor(topic);
       const optionsOpen = mode === 'show';
-      const position = positionText({ fen, userColor, mode, topic, lineName: book?.lineName || null, plan: planText(ctx) });
+      // Line name and plan only where the options really are the repertoire's.
+      const position = positionText({
+        fen, userColor, mode, topic,
+        lineName: choice.inBook ? book?.lineName || null : null, plan: choice.inBook ? planText(ctx) : null,
+      });
       const message: CoachMessage = {
         id: this.newId(), kind: 'teach', source: 'template', explanation: { whatHappened: position },
         arrows: teachArrows(lastMove, choice.options, optionsOpen),
@@ -247,7 +251,7 @@ export class Coach {
         teach: { topic, mode, position, options: choice.options, optionsOpen, inBook: choice.inBook },
       };
       this.currentId = message.id;
-      this.turn = { message, lastMove };
+      this.turn = { message, fen, lastMove };
       return message;
     } catch {
       return null;
@@ -319,8 +323,10 @@ export class Coach {
     this.currentId = null;
     this.post = null;
     this.lastMistake = null; // hints and playOn always refer to this move's verdict
-    this.turn = null;
     const teaching = this.mode === 'teach';
+    const turn = this.turn;
+    const openOptions = turn?.message.teach?.optionsOpen && turn.fen === move.fenBefore ? turn.message.teach.options : [];
+    this.turn = null;
     const history = game.history();
     const found = history.findIndex((m) => m.uci === move.uci && m.fenBefore === move.fenBefore);
     const index = found >= 0 ? found : history.length;
@@ -350,8 +356,11 @@ export class Coach {
         const reasons = deriveReasons(move.fenBefore, move.uci, {
           book: bookHit, area: verdict.area, line: [move.uci, ...(afterAnalysis.lines[0]?.uci ?? [])],
         });
+        if (teaching) {
+          return { verdict, message: this.teachGoodMove(verdict, move, kind, reasons, openOptions.some((o) => o.uci === move.uci)) };
+        }
         const bestReasons = kind !== null ? null : bestReasonsFor(move, game.userColor, before, verdict, beforeAnalysis);
-        return { verdict, message: this.postMove(verdict, move, kind, bookHit, reasons, bestReasons, teaching) };
+        return { verdict, message: this.postMove(verdict, move, kind, bookHit, reasons, bestReasons) };
       }
 
       const refutationUci = afterAnalysis.lines[0]?.uci.slice(0, 4) ?? [];
@@ -418,10 +427,24 @@ export class Coach {
     return shown;
   }
 
-  /** `teaching`: a top or book move is explained at once (no Explain tap). */
+  /**
+   * A teaching game's good (unflagged) move: a plain confirmation, never a question and never a
+   * better move. A move that was not one of the shown options also gets its own checked reasons.
+   */
+  private teachGoodMove(verdict: Verdict, move: PlayedMove, kind: TopKind, reasons: Reasons, wasShown: boolean): CoachMessage {
+    const why = wasShown ? null : reasonText(move.san, reasons);
+    const whatHappened = why ?? (wasShown ? `${move.san} was one of the options shown.` : `${move.san} is a fine move here.`);
+    const message: CoachMessage = {
+      id: this.newId(), kind: 'post_move', explanation: { whatHappened }, source: 'template', verdict,
+      summary: kind === 'book' ? '✓ Book move.' : '✓ Good move.', topKind: kind, explained: true, arrows: [],
+    };
+    this.post = { message, ctx: null };
+    return message;
+  }
+
   private postMove(
     verdict: Verdict, move: PlayedMove, kind: TopKind, book: BookHit | null,
-    reasons: Reasons, bestReasons: Reasons | null, teaching = false,
+    reasons: Reasons, bestReasons: Reasons | null,
   ): CoachMessage {
     const ctx: PostMoveContext = {
       verdict, move, kind, bookIdea: book?.node.idea ?? null, lineName: book?.lineName || null,
@@ -430,7 +453,7 @@ export class Coach {
     const { summary, explanation } = postMoveTemplate(ctx);
     const message: CoachMessage = {
       id: this.newId(), kind: 'post_move', explanation, source: 'template', verdict, summary, topKind: kind,
-      explained: teaching || kind === null, arrows: kind === null ? [arrow(verdict.bestUci, 'green')] : [],
+      explained: kind === null, arrows: kind === null ? [arrow(verdict.bestUci, 'green')] : [],
     };
     const post = { message, ctx };
     this.post = post;

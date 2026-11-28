@@ -6,6 +6,7 @@ import { moveLeaks } from '../../src/coach/leaks';
 import type { Engine } from '../../src/engine/engine';
 import { GameState } from '../../src/game/gameState';
 import type { Analysis, EngineLine, TeachMode } from '../../src/types';
+import type { Explanation } from '../../src/coach/templates';
 
 const line = (uci: string[], cp: number | null, mate: number | null = null): EngineLine => ({ uci, cp, mate });
 
@@ -35,13 +36,22 @@ const greens = (m: CoachMessage) => m.arrows.filter((a) => a.color === 'green');
 
 // Black's knight comes out; White (the user) is then out of the repertoire, with two close engine lines.
 const ITALIAN_BEFORE = 'rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2';
-function teachSetup(mode: TeachMode, opts: { reject?: boolean } = {}) {
+/** The position after `uci` from the Italian setup's turn. */
+function italianAfter(uci: string): string {
+  const g = new GameState('w', ITALIAN_BEFORE);
+  g.play('b8c6');
+  return g.play(uci).fenAfter;
+}
+function teachSetup(mode: TeachMode, opts: { reject?: boolean; over?: Partial<CoachDeps> } = {}) {
   const game = new GameState('w', ITALIAN_BEFORE);
   game.play('b8c6');
   const table = {
     [game.fen()]: [line(['d2d4', 'e5d4'], 80), line(['b1c3', 'g8f6'], 40), line(['a2a3', 'g8f6'], -100)],
+    [italianAfter('d2d4')]: [line(['e5d4', 'f3d4'], -80)],
+    // Bc4 is not an option, but only 40 worse: a good move that the classifier does not flag.
+    [italianAfter('f1c4')]: [line(['g8f6', 'd2d3'], -40)],
   };
-  const coach = new Coach(makeDeps(new FakeEngine(table, opts.reject), { teachModeFor: () => mode }));
+  const coach = new Coach(makeDeps(new FakeEngine(table, opts.reject), { teachModeFor: () => mode, ...opts.over }));
   coach.setMode('teach');
   return { game, coach };
 }
@@ -113,6 +123,16 @@ describe('Coach.teachTurn', () => {
     expect(await coach.teachTurn(new GameState('w', ITALIAN_BEFORE))).toBeNull();
   });
 
+  it('a custom start position is out of the repertoire: engine options, no line name', async () => {
+    const coach = new Coach(makeDeps(new FakeEngine({ [KNIGHT_FEN]: [line(['e1e2', 'e8e7'], 0)] })));
+    coach.setMode('teach');
+    const m = (await coach.teachTurn(new GameState('w', KNIGHT_FEN)))!;
+    expect(m.teach?.inBook).toBe(false);
+    expect(m.teach?.options.map((o) => o.uci)).toEqual(['e1e2']);
+    expect(m.teach?.topic).not.toBe('opening');
+    expect(m.teach?.position).not.toContain("You're in");
+  });
+
   it('a stale message cannot be opened after the user moves', async () => {
     const { game, coach } = teachSetup('guide');
     const m = (await coach.teachTurn(game))!;
@@ -147,6 +167,65 @@ describe('Coach teaching moves', () => {
     expect(verdict.flagged).toBe(false);
     expect(message?.kind).toBe('post_move');
     expect(message?.explained).toBe(true);
+  });
+
+  it('a shown option gets a plain confirmation with no question', async () => {
+    const { game, coach } = teachSetup('show');
+    await coach.teachTurn(game);
+    const { verdict, message } = await coach.onUserMove(game, game.play('d2d4'));
+    expect(verdict.flagged).toBe(false);
+    expect(message?.kind).toBe('post_move');
+    expect(message?.explained).toBe(true);
+    expect(message?.summary).toBe('✓ Good move.');
+    for (const t of [message!.summary!, message!.explanation.whatHappened, message!.explanation.better ?? '', message!.explanation.lesson ?? '']) {
+      expect(t).not.toContain('?');
+      expect(findJargon(t)).toEqual([]);
+    }
+  });
+
+  it('a good move that was not an option gets its own reasons and no better move', async () => {
+    const { game, coach } = teachSetup('show');
+    const turn = (await coach.teachTurn(game))!;
+    expect(turn.teach?.options.some((o) => o.uci === 'f1c4')).toBe(false);
+    const { verdict, message } = await coach.onUserMove(game, game.play('f1c4'));
+    expect(verdict.flagged).toBe(false);
+    expect(verdict.bestSan).toBe('d4');
+    expect(message?.kind).toBe('post_move');
+    expect(message?.explained).toBe(true);
+    expect(message ? greens(message) : null).toEqual([]);
+    const text = [message!.summary!, message!.explanation.whatHappened, message!.explanation.better ?? ''].join(' ');
+    expect(text).not.toContain(verdict.bestSan);
+    expect(text).not.toContain('?');
+    expect(message!.explanation.whatHappened).toMatch(/^Bc4 /);
+    expect(message!.explanation.whatHappened).not.toBe('Bc4 is a fine move here.');
+  });
+
+  it('play mode keeps its own feedback for the same move', async () => {
+    const { game, coach } = teachSetup('show');
+    coach.setMode('play');
+    const { message } = await coach.onUserMove(game, game.play('f1c4'));
+    expect(message?.summary).toBe('Your move: Bc4. A stronger option was d4.');
+    expect(message ? greens(message).map((a) => a.from + a.to) : null).toEqual(['d2d4']);
+  });
+
+  it("Claude's rewrite of a teaching mistake keeps the reveal", async () => {
+    const claude: Explanation = { whatHappened: 'Your knight on e5 can be taken.', better: 'Kd2 was the move.' };
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(new FakeEngine(knightTable()), { explain: () => Promise.resolve(claude) }));
+    coach.onUpdate((m) => updates.push(m));
+    coach.setMode('teach');
+    const game = new GameState('w', KNIGHT_FEN);
+    const { verdict, message } = await coach.onUserMove(game, game.play('f3e5'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(updates).toHaveLength(1);
+    const up = updates[0];
+    expect(up.id).toBe(message!.id);
+    expect(up.source).toBe('claude');
+    expect(up.explanation.whatHappened).toBe(claude.whatHappened);
+    expect(up.explanation.better).toBe(message!.explanation.better);
+    expect(up.explanation.better).toContain(verdict.bestSan);
+    expect(up.reveal).toBe(true);
+    expect(up.arrows).toContainEqual({ from: verdict.bestUci.slice(0, 2), to: verdict.bestUci.slice(2, 4), color: 'green' });
   });
 
   it('play mode mistake still hides the better move', async () => {
