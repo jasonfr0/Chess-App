@@ -10,6 +10,7 @@ import { lookup } from '../openings/repertoire';
 import { levelFor, recordMove } from '../profile/profile';
 import { levelChangeText, reviewLevels, suggestClock } from '../profile/weaning';
 import { suggestLinesOff } from '../profile/attackLines';
+import { playGames } from '../profile/games';
 import type { Db, SavedGame, Settings } from '../storage/db';
 import type { Analysis, CoachLevel, Color, GameResult, ProfileData } from '../types';
 
@@ -175,7 +176,7 @@ export function levelAt(game: GameState, profile: ProfileData, settings: Pick<Se
 
 /** Score of the user's last five finished games: win 1, draw 0.5. */
 function lastFiveScore(games: SavedGame[]): number {
-  return games
+  return playGames(games)
     .filter((g) => g.result !== null)
     .slice(-5)
     .reduce((sum, g) => sum + (g.result!.winner === null ? 0.5 : g.result!.winner === g.userColor ? 1 : 0), 0);

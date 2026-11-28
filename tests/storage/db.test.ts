@@ -178,4 +178,33 @@ describe('db', () => {
     const g = await b.getGame('a');
     expect([g?.attackLinesMoves, g?.userMoves]).toEqual([7, 9]);
   });
+
+  it('imports a backup with no teaching fields', async () => {
+    const db = await openDb(fresh());
+    await db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [game('a')], profile: defaultProfile() }));
+    expect((await db.getProfile()).teaching).toBeUndefined();
+    expect((await db.getGame('a'))!.mode).toBeUndefined();
+  });
+
+  it('round-trips mode, teaching and teachCount through export/import', async () => {
+    const a = await openDb(fresh());
+    const p = defaultProfile();
+    p.teaching = { gamesFinished: 2, topics: { safety: { mode: 'guide', shown: 3, need: 2, recent: [true, false] } } };
+    p.themes.hanging_piece = { ...p.themes.hanging_piece, teachCount: 1, teachExamples: [{ gameId: 't', ply: 4, fen: 'f' }] };
+    await a.saveProfile(p);
+    await a.saveGame({ ...game('t'), mode: 'teach' });
+    const b = await openDb(fresh());
+    await b.importAll(await a.exportAll());
+    expect((await b.getGame('t'))!.mode).toBe('teach');
+    const q = await b.getProfile();
+    expect(q.teaching).toEqual(p.teaching);
+    expect(q.themes.hanging_piece.teachCount).toBe(1);
+    expect(q.themes.hanging_piece.teachExamples).toEqual([{ gameId: 't', ply: 4, fen: 'f' }]);
+  });
+
+  it("rejects mode: 'other'", async () => {
+    const db = await openDb(fresh());
+    const bad = { ...game('x'), mode: 'other' };
+    await expect(db.importAll(JSON.stringify({ app: 'chess-coach', version: 1, games: [bad] }))).rejects.toBeInstanceOf(ImportError);
+  });
 });

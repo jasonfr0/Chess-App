@@ -1,4 +1,5 @@
 import type { SavedGame } from '../storage/db';
+import { playGames } from './games';
 import type { Theme } from '../types';
 
 export const SUGGEST_LINES_OFF =
@@ -10,7 +11,7 @@ const MIN_SHARE = 0.8;
 
 /** True iff the 3 most recent finished games each used attack lines on ≥80% of ≥10 user moves, with no flagged threat blunders. */
 export function suggestLinesOff(lastGames: SavedGame[]): boolean {
-  const recent = lastGames
+  const recent = playGames(lastGames)
     .filter((g) => g.result !== null)
     .sort((a, b) => b.startedAt - a.startedAt)
     .slice(0, 3);

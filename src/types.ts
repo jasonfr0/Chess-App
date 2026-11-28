@@ -20,7 +20,16 @@ export interface ThemeStat {
   count: number;
   lastSeen: number;
   examples: { gameId: string; ply: number; fen: string }[];
+  /** flagged moves in teaching games; kept apart from count/examples so they never move play-mode progress */
+  teachCount?: number;
+  teachExamples?: { gameId: string; ply: number; fen: string }[];
 }
+export type GameMode = 'play' | 'teach';
+export type TeachTopic = 'opening' | 'safety' | 'captures' | 'checks' | 'development' | 'endgame' | 'other';
+export type TeachMode = 'show' | 'guide';
+/** shown: shown turns since entering show. need: shown turns required before the next trial. recent: guide turns, true = success, newest last. */
+export interface TopicState { mode: TeachMode; shown: number; need: number; recent: boolean[] }
+export interface TeachState { gamesFinished: number; topics: Partial<Record<TeachTopic, TopicState>> }
 /**
  * good: a strong move found on the user's own. flagged: the coach stopped the game for it (level-dependent).
  * bad: a mistake or blunder whatever the level (missing in records saved before it existed: use `flagged`).
@@ -32,6 +41,7 @@ export interface ProfileData {
   moves: Record<Area, MoveRecord[]>;
   levels: Record<Area, CoachLevel>;
   levelChangedAt?: Partial<Record<Area, number>>;
+  teaching?: TeachState;
   /** Profile schema version; absent means 1. */
   version?: number;
 }

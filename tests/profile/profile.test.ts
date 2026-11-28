@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emptyProfile, recordMove, summary, levelFor, migrateProfile, PROFILE_VERSION, RESET_NOTICE } from '../../src/profile/profile';
+import { emptyProfile, recordMove, summary, levelFor, migrateProfile, recordTeachTheme, PROFILE_VERSION, RESET_NOTICE } from '../../src/profile/profile';
 import { defaultProfile, DEFAULT_SETTINGS } from '../../src/storage/db';
 import type { Verdict } from '../../src/coach/classify';
 import type { Theme, Area } from '../../src/types';
@@ -131,5 +131,31 @@ describe('migrateProfile', () => {
   });
   it('notice text', () => {
     expect(RESET_NOTICE).toBe("Coaching levels were reset: earlier games showed suggested moves, so they couldn't measure your own play.");
+  });
+});
+
+describe('recordTeachTheme', () => {
+  it('adds a flagged verdict to teachCount/teachExamples and touches nothing else', () => {
+    const p = emptyProfile();
+    const out = recordTeachTheme(p, flaggedV('hanging_piece'), ctx(3, 5000));
+    const t = out.themes.hanging_piece;
+    expect(t.teachCount).toBe(1);
+    expect(t.teachExamples).toEqual([{ gameId: 'g1', ply: 3, fen: 'fen3' }]);
+    expect(t.count).toBe(p.themes.hanging_piece.count);
+    expect(t.examples).toEqual(p.themes.hanging_piece.examples);
+    expect(t.lastSeen).toBe(p.themes.hanging_piece.lastSeen);
+    expect(out.moves).toEqual(p.moves);
+    expect(out.levels).toEqual(p.levels);
+  });
+  it('returns an equal profile for an unflagged verdict', () => {
+    const p = emptyProfile();
+    expect(recordTeachTheme(p, v(), ctx(1))).toEqual(p);
+  });
+  it('keeps the last 10 teach examples', () => {
+    let p = emptyProfile();
+    for (let i = 0; i < 11; i++) p = recordTeachTheme(p, flaggedV('other'), ctx(i));
+    expect(p.themes.other.teachCount).toBe(11);
+    expect(p.themes.other.teachExamples).toHaveLength(10);
+    expect(p.themes.other.teachExamples![0].ply).toBe(1);
   });
 });

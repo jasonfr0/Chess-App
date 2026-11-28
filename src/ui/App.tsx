@@ -3,6 +3,7 @@ import { Coach } from '../coach/coach';
 import { createExplainer } from '../coach/claude';
 import { createEngine, type Engine } from '../engine/engine';
 import { RESET_NOTICE, levelFor, migrateProfile, summary } from '../profile/profile';
+import { playGames } from '../profile/games';
 import { openDb, type Db, type Settings } from '../storage/db';
 import type { ProfileData } from '../types';
 import { GameScreen } from './GameScreen';
@@ -60,7 +61,7 @@ export function App() {
       }
       settingsRef.current = s;
       profileRef.current = p;
-      gamesCount.current = games.length;
+      gamesCount.current = playGames(games).length;
       const engine = createEngine();
       const coach = new Coach({
         engine,
@@ -93,7 +94,7 @@ export function App() {
   };
   // The games count (for Claude's profile summary) only changes when a game starts or ends.
   const onGameListChanged = () => {
-    db.listGames().then((g) => { gamesCount.current = g.length; }, () => {});
+    db.listGames().then((g) => { gamesCount.current = playGames(g).length; }, () => {});
   };
 
   return (
