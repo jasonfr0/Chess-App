@@ -89,6 +89,10 @@ function fakeCoach(): CoachApi & { recap: ReturnType<typeof vi.fn> } {
     playOn: vi.fn(),
     checkConsequence: vi.fn(() => null),
     recap: vi.fn(() => recapMessage),
+    setMode: vi.fn(),
+    teachTurn: vi.fn(async () => null),
+    openOptions: vi.fn(() => null),
+    teachRecap: vi.fn(() => recapMessage),
   };
 }
 
