@@ -30,19 +30,22 @@ function pieceList(pieces: HangingPiece[], owner: 'your' | 'their'): string {
 
 /**
  * "The position": 1–2 sentences. In guide mode it never points at a piece the user can win.
- * Only `undefended` pieces are named: a piece attacked by a cheaper one is still guarded, so
- * "taken for free" and "not guarded" would not be true of it.
+ * Only `undefended` pieces are called free or not guarded: a piece attacked by a cheaper one is
+ * still guarded, so the user's own such pieces get their own sentence instead.
  */
 export function positionText(input: {
   fen: string; userColor: Color; mode: TeachMode; topic: TeachTopic;
   lineName: string | null; plan: string | null;
 }): string {
   const { fen, userColor, mode, topic, lineName, plan } = input;
-  const free = positionFacts(fen).hanging.filter((p) => p.reason === 'undefended');
+  const hanging = positionFacts(fen).hanging;
+  const free = hanging.filter((p) => p.reason === 'undefended');
   const mine = free.filter((p) => p.color === userColor);
   const theirs = free.filter((p) => p.color !== userColor);
+  const cheaplyAttacked = hanging.filter((p) => p.reason === 'attacked_by_lower' && p.color === userColor);
   const out: string[] = [];
   if (mine.length > 0) out.push(`${capitalise(pieceList(mine, 'your'))} can be taken for free.`);
+  for (const p of cheaplyAttacked) out.push(`Your ${NAMES[p.piece]} on ${p.square} is attacked by a piece worth less.`);
   if (mode === 'show' && theirs.length > 0) {
     out.push(`${capitalise(pieceList(theirs, 'their'))} ${theirs.length > 1 ? 'are' : 'is'} not guarded.`);
   }

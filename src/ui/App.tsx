@@ -5,6 +5,7 @@ import { createEngine, type Engine } from '../engine/engine';
 import { RESET_NOTICE, levelFor, migrateProfile, summary } from '../profile/profile';
 import { playGames } from '../profile/games';
 import { openDb, type Db, type Settings } from '../storage/db';
+import { modeFor } from '../teach/fade';
 import type { ProfileData } from '../types';
 import { GameScreen } from './GameScreen';
 import { PatternsScreen } from './PatternsScreen';
@@ -69,6 +70,7 @@ export function App() {
         levelFor: (a) => levelFor(profileRef.current!, settingsRef.current!, a),
         profile: () => summary(profileRef.current!, Date.now(), gamesCount.current),
         themeCount: (t) => profileRef.current!.themes[t].count,
+        teachModeFor: (t) => modeFor(profileRef.current!.teaching, t),
       });
       setSettingsState(s);
       setProfileState(p);

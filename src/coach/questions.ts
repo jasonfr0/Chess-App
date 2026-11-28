@@ -164,7 +164,7 @@ function forkItem(ctx: QuestionContext): Item | null {
 }
 
 /** The opening plan text for this position, per the repertoire. */
-function planText(ctx: QuestionContext): string | null {
+export function planText(ctx: QuestionContext): string | null {
   if (ctx.book) return ctx.book.node.plan ?? null;
   if (ctx.history.length === 0 && ctx.userColor === 'w') return rootPlan('w');
   const userMoves = ctx.history.filter((m) => m.color === ctx.userColor).length;

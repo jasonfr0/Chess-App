@@ -45,6 +45,7 @@ function makeDeps(engine: Engine, over: Partial<CoachDeps> = {}): CoachDeps {
     levelFor: () => 'full',
     profile: () => ({ topThemes: [], gamesPlayed: 0 }),
     themeCount: () => 0,
+    teachModeFor: () => 'show',
     ...over,
   };
 }

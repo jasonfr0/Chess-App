@@ -3,7 +3,9 @@ import type { Square } from 'chess.js';
 import type { Engine } from '../engine/engine';
 import { lookup } from '../openings/repertoire';
 import type { BookHit } from '../openings/repertoire';
-import type { Analysis, Area, CoachLevel, Color, PlayedMove, ProfileSummary, Theme } from '../types';
+import type {
+  Analysis, Area, CoachLevel, Color, GameMode, PlayedMove, ProfileSummary, TeachMode, TeachTopic, Theme,
+} from '../types';
 import type { GameState } from '../game/gameState';
 import { areaOf, classifyMove } from './classify';
 import type { Verdict } from './classify';
@@ -11,7 +13,7 @@ import { positionFacts } from './facts';
 import type { PieceRef } from './facts';
 import { THEME_LESSONS, THEME_WHY, mistakeTemplate } from './templates';
 import type { Explanation, MistakeContext } from './templates';
-import { preMoveCoaching } from './questions';
+import { planText, preMoveCoaching } from './questions';
 import { revealsMove } from './leaks';
 import type { QuestionContext } from './questions';
 import { postMoveTemplate, revealTemplate, topMoveKind } from './postMove';
@@ -22,12 +24,16 @@ import { deriveReasons } from './reasons';
 import type { Reasons } from './reasons';
 import { buildPacket, buildRevealPacket } from './claude';
 import type { FactPacket } from './claude';
+import { teachOptions } from '../teach/options';
+import type { TeachOption } from '../teach/options';
+import { TOPIC_LABEL, topicOf } from '../teach/topic';
+import { positionText } from '../teach/position';
 
 export type Arrow = { from: string; to: string; color: 'green' | 'red' | 'blue' };
 /** A take-back hint and the squares to ring for it ([] when its text names none). */
 export interface HintStep { text: string; highlight: string[] }
 export interface CoachMessage {
-  id: string; kind: 'pre_move' | 'post_move' | 'mistake' | 'consequence' | 'recap' | 'level_change';
+  id: string; kind: 'pre_move' | 'post_move' | 'mistake' | 'consequence' | 'recap' | 'level_change' | 'teach';
   explanation: Explanation; arrows: Arrow[]; source: 'template' | 'claude';
   /**
    * The judged move. On a 'mistake' message the UI must not render verdict.bestSan / bestUci (or
@@ -43,14 +49,24 @@ export interface CoachMessage {
    * book move until the user taps Explain; a "stronger option" explanation is shown at once (true).
    */
   summary?: string; topKind?: TopKind; explained?: boolean;
-  /** post_move: the better move after a mistake, revealed by Show me or after Play on (topKind is null). */
+  /**
+   * post_move: the better move after a mistake, revealed by Show me or after Play on (topKind is null).
+   * mistake (teaching games only): the better move is shown on the card at once.
+   */
   reveal?: boolean;
   /** mistake: the engine line to replay when the consequence takes several moves (a forced mate, or material lost after ply 1). */
   watch?: WatchPly[];
+  /**
+   * teach: the turn's topic and mode, the position text, the options (shown only while optionsOpen;
+   * in guide mode they open on "Show me options"), and whether the position is in the repertoire.
+   */
+  teach?: { topic: TeachTopic; mode: TeachMode; position: string; options: TeachOption[]; optionsOpen: boolean; inBook: boolean };
 }
 export interface CoachDeps {
   engine: Engine; explain: (p: FactPacket) => Promise<Explanation | null>;
   levelFor: (a: Area) => CoachLevel; profile: () => ProfileSummary; themeCount: (t: Theme) => number;
+  /** Teaching games: whether this topic is shown or guided. */
+  teachModeFor: (t: TeachTopic) => TeachMode;
 }
 
 const ANALYSIS = { depth: 14, multipv: 3 };
@@ -82,6 +98,29 @@ function bestReasonsFor(
 
 /** A mistake card never carries a better-move field, even from Claude. */
 const withoutBetter = ({ better: _better, ...rest }: Explanation): Explanation => rest;
+
+/** The most frequent theme among the flagged verdicts (first seen wins a tie), or null. */
+function topTheme(verdicts: Verdict[]): { theme: Theme; count: number } | null {
+  const counts = new Map<Theme, number>();
+  for (const v of verdicts) if (v.flagged) counts.set(v.theme, (counts.get(v.theme) ?? 0) + 1);
+  let top: Theme | null = null;
+  for (const [theme, n] of counts) if (top === null || n > counts.get(top)!) top = theme;
+  return top === null ? null : { theme: top, count: counts.get(top)! };
+}
+
+const habitLine = (theme: Theme) => `Habit to work on: ${THEME_LESSONS[theme].habit}`;
+
+/** A teaching recap's line for a topic that moved between showing and guiding. */
+function changeLine({ topic, to }: { topic: TeachTopic; to: TeachMode }): string {
+  return to === 'guide'
+    ? `${TOPIC_LABEL[topic]}: I'll stop showing moves here and ask you first.`
+    : `${TOPIC_LABEL[topic]}: I'll go back to showing moves for a while.`;
+}
+
+/** Green arrows for the options while they are shown, after the blue arrow for their last move. */
+function teachArrows(lastMove: PlayedMove | null, options: TeachOption[], open: boolean): Arrow[] {
+  return [...(lastMove ? [arrow(lastMove.uci, 'blue')] : []), ...(open ? options.map((o) => arrow(o.uci, 'green')) : [])];
+}
 
 function joinList(items: string[]): string {
   return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
@@ -151,6 +190,9 @@ export class Coach {
   private post: { message: CoachMessage; ctx: PostMoveContext | null } | null = null;
   private lastMistake: Mistake | null = null;
   private tracker: Tracker | null = null;
+  private mode: GameMode = 'play';
+  /** The latest teach message and the move it followed, until the next user move or cancel. */
+  private turn: { message: CoachMessage; lastMove: PlayedMove | null } | null = null;
 
   constructor(private deps: CoachDeps) {}
 
@@ -163,6 +205,67 @@ export class Coach {
     this.currentId = null;
     this.post = null;
     this.tracker = null;
+    this.turn = null;
+  }
+
+  /** Play or teaching game ('play' by default). Cancels anything pending. */
+  setMode(mode: GameMode): void {
+    this.mode = mode;
+    this.cancelPending();
+  }
+
+  /**
+   * The teaching pre-move message. Unlike preMove it waits for the analysis; with none (the engine
+   * failed) it is built from the repertoire and the facts alone. Null when it is not the user's turn
+   * or the game is over.
+   */
+  async teachTurn(game: GameState): Promise<CoachMessage | null> {
+    this.currentId = null;
+    this.turn = null;
+    try {
+      if (!game.isUserTurn() || game.result() !== null) return null;
+      const history = game.history();
+      const lastMove = history.at(-1) ?? null;
+      const fen = game.fen();
+      const { userColor } = game;
+      const book = lookup(userColor, history.map((m) => m.san));
+      const area = areaOf(fen, history.length, book !== null);
+      const epoch = this.epoch;
+      const analysis = await this.analyse(fen).catch(() => null);
+      if (epoch !== this.epoch || game.fen() !== fen || game.history().length !== history.length) return null;
+
+      const ctx: QuestionContext = { fen, lastMove, history, userColor, facts: positionFacts(fen), analysis, book };
+      const choice = teachOptions({ fen, userColor, sanHistory: history.map((m) => m.san), area, analysis });
+      const topic = topicOf({ inBook: choice.inBook, area, reasons: choice.bestReasons });
+      const mode: TeachMode = choice.options.length === 0 ? 'show' : this.deps.teachModeFor(topic);
+      const optionsOpen = mode === 'show';
+      const position = positionText({ fen, userColor, mode, topic, lineName: book?.lineName || null, plan: planText(ctx) });
+      const message: CoachMessage = {
+        id: this.newId(), kind: 'teach', source: 'template', explanation: { whatHappened: position },
+        arrows: teachArrows(lastMove, choice.options, optionsOpen),
+        ...preMoveFields(ctx),
+        teach: { topic, mode, position, options: choice.options, optionsOpen, inBook: choice.inBook },
+      };
+      this.currentId = message.id;
+      this.turn = { message, lastMove };
+      return message;
+    } catch {
+      return null;
+    }
+  }
+
+  /** "Show me options" on a guided turn: the same message with the options and their arrows; null for a stale id. */
+  openOptions(messageId: string): CoachMessage | null {
+    const turn = this.turn;
+    if (!turn?.message.teach || turn.message.id !== messageId || this.currentId !== messageId) return null;
+    const { teach } = turn.message;
+    const message: CoachMessage = {
+      ...turn.message,
+      arrows: teachArrows(turn.lastMove, teach.options, true),
+      teach: { ...teach, optionsOpen: true },
+    };
+    turn.message = message;
+    return message;
   }
 
   /**
@@ -216,6 +319,8 @@ export class Coach {
     this.currentId = null;
     this.post = null;
     this.lastMistake = null; // hints and playOn always refer to this move's verdict
+    this.turn = null;
+    const teaching = this.mode === 'teach';
     const history = game.history();
     const found = history.findIndex((m) => m.uci === move.uci && m.fenBefore === move.fenBefore);
     const index = found >= 0 ? found : history.length;
@@ -227,7 +332,8 @@ export class Coach {
 
     const epoch = this.epoch;
     try {
-      const level = this.deps.levelFor(areaOf(move.fenBefore, index, inBook));
+      // Teaching games judge every move at full, whatever the Play levels say.
+      const level: CoachLevel = teaching ? 'full' : this.deps.levelFor(areaOf(move.fenBefore, index, inBook));
       const beforeAnalysis = await this.analyse(move.fenBefore);
       if (epoch !== this.epoch) return stub;
       const afterAnalysis = await this.analyse(move.fenAfter);
@@ -245,12 +351,14 @@ export class Coach {
           book: bookHit, area: verdict.area, line: [move.uci, ...(afterAnalysis.lines[0]?.uci ?? [])],
         });
         const bestReasons = kind !== null ? null : bestReasonsFor(move, game.userColor, before, verdict, beforeAnalysis);
-        return { verdict, message: this.postMove(verdict, move, kind, bookHit, reasons, bestReasons) };
+        return { verdict, message: this.postMove(verdict, move, kind, bookHit, reasons, bestReasons, teaching) };
       }
 
       const refutationUci = afterAnalysis.lines[0]?.uci.slice(0, 4) ?? [];
       const ctx: MistakeContext = {
-        verdict, move, factsAfter: positionFacts(move.fenAfter), themeCount: this.deps.themeCount(verdict.theme),
+        verdict, move, factsAfter: positionFacts(move.fenAfter),
+        // The "nth time" line counts Play games only.
+        themeCount: teaching ? 0 : this.deps.themeCount(verdict.theme),
       };
       // No better move and no green arrow: the user decides first (take back and look, or play on).
       const explanation = mistakeTemplate(ctx);
@@ -261,6 +369,7 @@ export class Coach {
       const bestReasons = bestReasonsFor(move, game.userColor, before, verdict, beforeAnalysis);
       this.lastMistake = { verdict, move, refutationUci, plyAfter: index + 1, bestReasons };
       this.currentId = message.id;
+      if (teaching) return { verdict, message: this.teachMistake(message, ctx, bestReasons) };
       this.publish(message, () => buildPacket('mistake', ctx, explanation, this.deps.profile()),
         () => this.currentId === message.id, {
           // Claude's prose is checked too: no field may point at the better move.
@@ -291,9 +400,28 @@ export class Coach {
       () => this.post === post, { onUpgrade: (upgraded) => { post.message = upgraded; } });
   }
 
+  /**
+   * A teaching game's mistake card: the better move, its reasons and its green arrow are on it at
+   * once. Claude may reword what happened and the lesson; the better-move field stays the template's.
+   */
+  private teachMistake(message: CoachMessage, ctx: MistakeContext, bestReasons: Reasons): CoachMessage {
+    const { verdict, move } = ctx;
+    const packetTemplate = message.explanation;
+    const better = revealTemplate({ verdict, move, bestReasons }, ctx.factsAfter).explanation.whatHappened;
+    const shown: CoachMessage = {
+      ...message, reveal: true,
+      explanation: { ...message.explanation, better },
+      arrows: [...message.arrows, arrow(verdict.bestUci, 'green')],
+    };
+    this.publish(shown, () => buildPacket('mistake', ctx, packetTemplate, this.deps.profile()),
+      () => this.currentId === shown.id, { fields: (e) => ({ ...e, better }) });
+    return shown;
+  }
+
+  /** `teaching`: a top or book move is explained at once (no Explain tap). */
   private postMove(
     verdict: Verdict, move: PlayedMove, kind: TopKind, book: BookHit | null,
-    reasons: Reasons, bestReasons: Reasons | null,
+    reasons: Reasons, bestReasons: Reasons | null, teaching = false,
   ): CoachMessage {
     const ctx: PostMoveContext = {
       verdict, move, kind, bookIdea: book?.node.idea ?? null, lineName: book?.lineName || null,
@@ -302,7 +430,7 @@ export class Coach {
     const { summary, explanation } = postMoveTemplate(ctx);
     const message: CoachMessage = {
       id: this.newId(), kind: 'post_move', explanation, source: 'template', verdict, summary, topKind: kind,
-      explained: kind === null, arrows: kind === null ? [arrow(verdict.bestUci, 'green')] : [],
+      explained: teaching || kind === null, arrows: kind === null ? [arrow(verdict.bestUci, 'green')] : [],
     };
     const post = { message, ctx };
     this.post = post;
@@ -410,10 +538,7 @@ export class Coach {
   }
 
   recap(_game: GameState, verdicts: Verdict[]): CoachMessage {
-    const counts = new Map<Theme, number>();
-    for (const v of verdicts) if (v.flagged) counts.set(v.theme, (counts.get(v.theme) ?? 0) + 1);
-    let top: Theme | null = null;
-    for (const [theme, n] of counts) if (top === null || n > counts.get(top)!) top = theme;
+    const top = topTheme(verdicts);
 
     let stretch = 0;
     let run = 0;
@@ -423,17 +548,28 @@ export class Coach {
     }
 
     const themeLine = top
-      ? `Main theme this game: ${THEME_LESSONS[top].title} (${counts.get(top)} ${counts.get(top) === 1 ? 'time' : 'times'}).`
+      ? `Main theme this game: ${THEME_LESSONS[top.theme].title} (${top.count} ${top.count === 1 ? 'time' : 'times'}).`
       : 'No big mistakes this game.';
     const wellLine = stretch > 0
       ? `You played ${stretch} ${stretch === 1 ? 'move' : 'moves'} in a row without a big mistake.`
       : 'You played the game through to the end.';
-    const habitTheme = top ?? this.deps.profile().topThemes[0]?.theme ?? 'hanging_piece';
-    const habitLine = `Habit to work on: ${THEME_LESSONS[habitTheme].habit}`;
+    const habitTheme = top?.theme ?? this.deps.profile().topThemes[0]?.theme ?? 'hanging_piece';
     return {
       id: this.newId(), kind: 'recap', arrows: [], source: 'template',
-      explanation: { whatHappened: themeLine, better: wellLine, lesson: habitLine },
+      explanation: { whatHappened: themeLine, better: wellLine, lesson: habitLine(habitTheme) },
     };
+  }
+
+  /** A teaching game's recap: the topics that came up, topics that moved between showing and guiding, and the habit. */
+  teachRecap(verdicts: Verdict[], topics: TeachTopic[], changes: { topic: TeachTopic; to: TeachMode }[]): CoachMessage {
+    const labels = [...new Set(topics)].map((t) => TOPIC_LABEL[t]);
+    const top = topTheme(verdicts);
+    const explanation: Explanation = {
+      whatHappened: labels.length > 0 ? `Topics this game: ${labels.join(', ')}.` : 'A short game: no topics came up.',
+      ...(changes.length > 0 ? { better: changes.map(changeLine).join(' ') } : {}),
+      lesson: top ? habitLine(top.theme) : 'No big mistakes this game.',
+    };
+    return { id: this.newId(), kind: 'recap', arrows: [], source: 'template', explanation };
   }
 
   private newId(): string {

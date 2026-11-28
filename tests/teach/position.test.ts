@@ -57,4 +57,30 @@ describe('positionText', () => {
       expect(moveLeaks(text)).toEqual([]);
     }
   });
+  it('names a guarded piece attacked by a cheaper one, after the free ones', () => {
+    // Knight on d4 is unguarded; bishop on f4 is guarded by the g3 pawn; the e5 pawn attacks both.
+    const fen = 'rnbqkbnr/pppp1ppp/8/4p3/3N1B2/6P1/PPPPPP1P/RN1QKB1R w KQkq - 0 1';
+    const hanging = positionFacts(fen).hanging;
+    expect(hanging).toContainEqual(expect.objectContaining({ square: 'd4', color: 'w', reason: 'undefended' }));
+    expect(hanging).toContainEqual(expect.objectContaining({ square: 'f4', piece: 'b', color: 'w', reason: 'attacked_by_lower' }));
+    for (const mode of ['show', 'guide'] as TeachMode[]) {
+      const text = positionText({ ...base, fen, mode, lineName: 'Italian Game', plan: 'Get your pieces out quickly.' });
+      expect(text).toBe('Your knight on d4 can be taken for free. Your bishop on f4 is attacked by a piece worth less.');
+      expect(findJargon(text)).toEqual([]);
+      expect(moveLeaks(text)).toEqual([]);
+    }
+  });
+
+  it('the cheaper-attacker sentence ranks before the line name', () => {
+    const fen = 'rnbqkbnr/pppp1ppp/8/4p3/3Q4/5N2/PPPPPPPP/RNB1KB1R w KQkq - 0 1';
+    const text = positionText({ ...base, fen, mode: 'guide', lineName: 'Italian Game', plan: 'Get your pieces out quickly.' });
+    expect(text).toBe("Your queen on d4 is attacked by a piece worth less. You're in the Italian Game.");
+  });
+
+  it("never says it of the opponent's pieces", () => {
+    // Black bishop on f5 is guarded by the g6 pawn and attacked by the white e4 pawn.
+    const fen = 'rnbqk1nr/pppppp1p/6p1/5b2/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1';
+    expect(positionFacts(fen).hanging).toContainEqual(expect.objectContaining({ square: 'f5', color: 'b', reason: 'attacked_by_lower' }));
+    expect(positionText({ ...base, fen, mode: 'show' })).not.toContain('worth less');
+  });
 });
