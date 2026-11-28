@@ -239,7 +239,7 @@ export function GameScreen({ coachOffline, ...deps }: Props) {
               </button>
             ))}
           </div>
-          <p className="muted">{TEACH_NOTE}</p>
+          {gameType === 'teach' && <p className="muted">{TEACH_NOTE}</p>}
           <h2>New game: play as</h2>
           <div className="actions">
             <button type="button" className="primary" onClick={() => actions.start('w', gameType)}>White</button>

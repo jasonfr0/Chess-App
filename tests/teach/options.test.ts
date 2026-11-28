@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
-import { teachOptions, previewLine, NO_REASON, MAX_OPTIONS, PREVIEW_PLIES } from '../../src/teach/options';
+import { teachOptions, previewLine, afterDash, NO_REASON, MAX_OPTIONS, PREVIEW_PLIES } from '../../src/teach/options';
+import { findJargon } from '../../src/coach/jargon';
+import type { TeachOption } from '../../src/teach/options';
+import type { Color } from '../../src/types';
 import { bookReplies } from '../../src/openings/repertoire';
 import { deriveReasons, reasonText } from '../../src/coach/reasons';
 import type { Analysis, EngineLine } from '../../src/types';
@@ -110,6 +113,76 @@ describe('teachOptions', () => {
     expect(r.inBook).toBe(false);
     expect(r.options).toEqual([]);
     expect(r.bestReasons).toBeNull();
+  });
+});
+
+/** A reason reads after "{san} – ": it never opens with the move again, and it has no jargon. */
+function expectReadable(options: TeachOption[]) {
+  for (const o of options) {
+    expect(o.reason.startsWith(o.san), `${o.san} – ${o.reason}`).toBe(false);
+    expect(o.reason.charAt(0)).toBe(o.reason.charAt(0).toUpperCase());
+    expect(findJargon(o.reason), o.reason).toEqual([]);
+  }
+}
+
+describe('option reasons', () => {
+  it("a book option's reason is the repertoire node's idea", () => {
+    const fen = new Chess(); fen.move('e4'); fen.move('e5');
+    const r = teachOptions({ fen: fen.fen(), userColor: 'w', sanHistory: ['e4', 'e5'], area: 'opening', analysis: null });
+    const nodes = bookReplies('w', ['e4', 'e5']);
+    expect(r.inBook).toBe(true);
+    for (const o of r.options) expect(o.reason).toBe(nodes.find((n) => n.san === o.san)!.idea);
+    expect(r.bestReasons).not.toBeNull();
+  });
+
+  it('no book option in the repertoire repeats its move, and none has jargon', () => {
+    let positions = 0;
+    const visit = (color: Color, history: string[]) => {
+      if (history.length > 24) return;
+      const chess = new Chess();
+      for (const san of history) chess.move(san);
+      if (chess.turn() === color) {
+        const r = teachOptions({ fen: chess.fen(), userColor: color, sanHistory: history, area: 'opening', analysis: null });
+        expectReadable(r.options);
+        positions++;
+      }
+      for (const n of bookReplies(color, history)) visit(color, [...history, n.san]);
+    };
+    visit('w', []);
+    visit('b', []);
+    expect(positions).toBeGreaterThan(10);
+  });
+
+  it('out of book, a reason reads after the move: no SAN at the start', () => {
+    const fen = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 1';
+    const r = teachOptions({
+      fen, userColor: 'w', sanHistory: ['h3'], area: 'middlegame',
+      analysis: analysis(fen, [{ uci: ['d2d4', 'e5d4'], cp: 80, mate: null }, { uci: ['b1c3', 'g8f6'], cp: 40, mate: null }]),
+    });
+    expect(r.options.map((o) => o.san)).toEqual(['d4', 'Nc3']);
+    expectReadable(r.options);
+    const full = reasonText('Nc3', deriveReasons(fen, 'b1c3', { book: null, area: 'middlegame', line: ['b1c3', 'g8f6'] }))!;
+    expect(full.startsWith('Nc3 ')).toBe(true);
+    expect(r.options[1].reason).toBe(full.charAt(4).toUpperCase() + full.slice(5));
+  });
+
+  it('a mate option reads "Checkmate. …"', () => {
+    const fen = 'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 0 1';
+    const r = teachOptions({
+      fen, userColor: 'w', sanHistory: ['h3', 'h6'], area: 'opening',
+      analysis: analysis(fen, [{ uci: ['f3f7'], cp: null, mate: 1 }]),
+    });
+    expect(r.options[0].san).toBe('Qxf7#');
+    expect(r.options[0].reason).toBe('Checkmate. That ends the game: you win.');
+    expectReadable(r.options);
+  });
+
+  it('afterDash strips the move and keeps other text as is', () => {
+    expect(afterDash('Qxf7#', 'Qxf7# is checkmate. That ends the game: you win.')).toBe('Checkmate. That ends the game: you win.');
+    expect(afterDash('d4', 'd4 is part of the Queen\'s Gambit. Take the centre.')).toBe('Part of the Queen\'s Gambit. Take the centre.');
+    expect(afterDash('Nc3', 'Nc3 brings your knight out.')).toBe('Brings your knight out.');
+    expect(afterDash('Nc3', 'Something else.')).toBe('Something else.');
+    expect(afterDash('Nc3', null)).toBeNull();
   });
 });
 

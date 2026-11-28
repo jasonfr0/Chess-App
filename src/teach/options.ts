@@ -17,6 +17,20 @@ export const PREVIEW_PLIES = 6;
 /** The best move's reason when no checked reason can be derived for it. */
 export const NO_REASON = 'This is the strongest move here. Watch the line to see where it leads.';
 
+const capitalise = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/**
+ * The UI prints "{san} – {reason}", so a reason must not open with the move again: "Qxf7 is checkmate. …"
+ * becomes "Checkmate. …", "Nc3 brings your knight out…" becomes "Brings your knight out…".
+ */
+export function afterDash(san: string, text: string | null): string | null {
+  if (text === null) return null;
+  if (!text.startsWith(`${san} `)) return text;
+  const rest = text.slice(san.length + 1);
+  if (rest.startsWith('is checkmate.')) return `Checkmate.${rest.slice('is checkmate.'.length)}`;
+  return capitalise(rest.startsWith('is ') ? rest.slice(3) : rest);
+}
+
 /** Replays `line` from `fen` (user to move): first ply by 'user', alternating. Null when fewer than 2 plies replay. Capped at PREVIEW_PLIES. */
 export function previewLine(fen: string, line: string[]): WatchPly[] | null {
   let chess: Chess;
@@ -92,7 +106,8 @@ function bookChoice(input: Input, nodes: RepertoireNode[]): TeachChoice {
     if (!uci || options.some((o) => o.uci === uci)) continue;
     const line = analysis?.lines.find((l) => l.uci[0] === uci)?.uci;
     const reasons = deriveReasons(fen, uci, { book: lookup(userColor, [...sanHistory, node.san]), area, line });
-    const reason = reasonText(node.san, reasons) ?? node.idea;
+    // The position text already names the opening: the reason is the line's own idea.
+    const reason = node.idea;
     const watch = (line && previewLine(fen, line)) || previewLine(fen, bookContinuation(fen, node));
     if (options.length === 0) bestReasons = reasons;
     options.push({ uci, san: node.san, reason, watch });
@@ -119,7 +134,7 @@ function engineChoice(input: Input, analysis: Analysis): TeachChoice {
     const san = uciLineToSan(fen, [uci])[0];
     if (!san) continue;
     const reasons = deriveReasons(fen, uci, { book: null, area, line: line.uci });
-    const text = reasonText(san, reasons);
+    const text = afterDash(san, reasonText(san, reasons));
     const first = options.length === 0;
     if (text === null && !first) continue;
     if (first) bestReasons = reasons;

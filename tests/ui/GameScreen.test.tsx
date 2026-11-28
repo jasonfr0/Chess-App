@@ -1123,9 +1123,14 @@ describe('GameScreen: Play to learn', () => {
     await setup(undefined, { coach });
     const group = await screen.findByRole('radiogroup', { name: 'Game type' });
     expect(within(group).getByRole('radio', { name: 'Play' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByText("The coach shows you good moves before you play. These games don't count toward your level.")).toBeInTheDocument();
+    const note = "The coach shows you good moves before you play. These games don't count toward your level.";
+    expect(screen.queryByText(note)).not.toBeInTheDocument();
     fireEvent.click(within(group).getByRole('radio', { name: 'Play to learn' }));
     expect(within(group).getByRole('radio', { name: 'Play to learn' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(note)).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole('radio', { name: 'Play' }));
+    expect(screen.queryByText(note)).not.toBeInTheDocument();
+    fireEvent.click(within(group).getByRole('radio', { name: 'Play to learn' }));
     fireEvent.click(screen.getByRole('button', { name: 'White' }));
     expect(await screen.findByText(TEACH_LABEL)).toBeInTheDocument();
     await waitFor(() => expect(coach.teachTurn).toHaveBeenCalled());
