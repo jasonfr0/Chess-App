@@ -286,8 +286,10 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     let p = recordTeachTheme(profile.current, verdict, { ...ctx, fen: fenBefore });
     const t = teach.current;
     const turn = t.turn;
-    if (turn?.fen === fenBefore && turn.options > 0 && !t.countedFens.has(fenBefore)) {
-      t.countedFens.add(fenBefore);
+    // Only the first attempt from a position decides, counted or not (e.g. played before the turn showed).
+    const first = !t.countedFens.has(fenBefore);
+    t.countedFens.add(fenBefore);
+    if (first && turn?.fen === fenBefore && turn.options > 0) {
       p = {
         ...p,
         teaching: recordTurn(p.teaching, turn.topic, { mode: turn.mode, flagged: verdict.flagged, openedOptions: t.optionsOpenedFor === fenBefore }),
@@ -296,14 +298,16 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     if (p !== profile.current) setProfile(p);
   };
 
-  /** Teaching games end with the teaching recap and the fade's game count; nothing of the assessment runs. */
-  const endTeachGame = () => {
+  /**
+   * Teaching games end with the teaching recap and the fade's game count; nothing of the assessment runs.
+   * Applied at once, before any await, so a game started right after sees the finished count.
+   */
+  const endTeachGame = (tg: TeachGame, verdicts: Verdict[]) => {
     const teachingState = finishGame(profile.current.teaching);
-    const changes = topicChanges(teach.current.atStart, teachingState);
+    const changes = topicChanges(tg.atStart, teachingState);
     setProfile({ ...profile.current, teaching: teachingState });
-    if (!d.current.startFen) d.current.onGameListChanged?.();
     set({
-      recap: d.current.coach.teachRecap(meta.current.verdicts, teach.current.topics, changes),
+      recap: d.current.coach.teachRecap(verdicts, tg.topics, changes),
       levelNotes: [], clockSuggestion: false, linesOffSuggestion: false,
     });
   };
@@ -312,14 +316,21 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     const game = view.current.game;
     if (!game || view.current.phase === 'over') return;
     gen.current++;
+    // The finished game's mode and data, fixed now: New game or a new start during the awaits below
+    // replaces the view, the mode and the per-game refs.
+    const tg = teaching() ? teach.current : null;
+    const { verdicts } = meta.current;
     d.current.coach.cancelPending();
     set({ phase: 'over', result, promotion: null, mistake: null, hints: null, hintHighlight: [], watching: null, watchedLine: null });
     save();
     const { db, coach, startFen } = d.current;
+    /** Still showing the finished game: only then is its recap and its suggestions written to the view. */
+    const current = () => view.current.game === game;
+    if (tg) endTeachGame(tg, verdicts);
     if (!startFen) await db.setCurrentGame(null).catch(ignore);
-    if (teaching()) { endTeachGame(); return; }
+    if (tg) { if (!startFen) d.current.onGameListChanged?.(); return; }
 
-    const recap = coach.recap(game, meta.current.verdicts);
+    const recap = coach.recap(game, verdicts);
     const review = reviewLevels(profile.current);
     if (review.changes.length > 0) setProfile(review.profile);
 
@@ -328,6 +339,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
     if (!startFen) d.current.onGameListChanged?.();
     const rating = adjustOpponentRating(settings.current.opponentRating, lastFiveScore(games));
     if (rating !== settings.current.opponentRating) setSettings({ ...settings.current, opponentRating: rating });
+    if (!current()) return;
 
     // A manual override pins an area's level, so changes underneath it are not announced.
     const { levelOverride } = settings.current;
@@ -569,7 +581,6 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
       const game = view.current.game;
       if (!game || view.current.phase !== 'mistake') return;
       stopWork();
-      const watched = watchedThis.current && view.current.mistake?.watch ? view.current.mistake.watch : null;
       game.takeBackUserMove();
       if (teaching()) {
         // No hint ladder in teaching games: the turn message (with its options) is shown again.
@@ -578,6 +589,7 @@ export function useGame(deps: GameDeps): [GameView, GameActions] {
         runPreMove(game);
         return;
       }
+      const watched = watchedThis.current && view.current.mistake?.watch ? view.current.mistake.watch : null;
       // The taken-back move no longer counts toward this game's moves.
       meta.current.userMoves = Math.max(0, meta.current.userMoves - 1);
       if (meta.current.lastWithLines) meta.current.attackLinesMoves = Math.max(0, meta.current.attackLinesMoves - 1);

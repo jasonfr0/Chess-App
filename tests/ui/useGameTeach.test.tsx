@@ -32,6 +32,8 @@ interface TeachCoachOpts {
   topic?: TeachTopic; mode?: TeachMode; options?: TeachOption[];
   /** Which user moves (1-based, counting attempts) are flagged. */
   flagged?: number[];
+  /** The first teaching turn never arrives (the user moves before it is shown). */
+  holdFirstTurn?: boolean;
 }
 
 /** A coach whose teaching turns report a fixed topic, mode and options. */
@@ -48,6 +50,7 @@ function teachCoach(o: TeachCoachOpts = {}) {
     setMode: vi.fn(),
     preMove: vi.fn(async () => null),
     teachTurn: vi.fn(async (): Promise<CoachMessage | null> => {
+      if (o.holdFirstTurn && id === 0) { id++; return new Promise<CoachMessage | null>(() => {}); }
       const m: CoachMessage = {
         id: `teach-${++id}`, kind: 'teach', source: 'template', arrows: [], explanation: { whatHappened: 'The position.' },
         teach: { topic, mode, position: 'The position.', options, optionsOpen: mode === 'show', inBook: false },
@@ -236,6 +239,24 @@ describe('useGame: teaching games', () => {
     expect(s.profile().moves).toEqual(start.moves);
   });
 
+  it('a first attempt played before the turn showed is not counted, nor is its retry', async () => {
+    const start: ProfileData = { ...defaultProfile(), teaching: { gamesFinished: 3, topics: {} } };
+    const s = await setup({ profile: start, coach: teachCoach({ topic: 'safety', mode: 'show', flagged: [1], holdFirstTurn: true }) });
+    await waitFor(() => expect(s.view().phase).toBe('setup'));
+    act(() => s.actions().start('w', 'teach'));
+    await waitFor(() => expect(s.view().phase).toBe('user'));
+    expect(s.view().coachMsg).toBeNull();
+    playAny(s);
+    await waitFor(() => expect(s.view().phase).toBe('mistake'));
+    act(() => s.actions().takeBack());
+    await userTurn(s); // the retry's turn is shown
+    playAny(s);
+    await waitFor(() => expect(s.coach.onUserMove).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(s.view().phase).not.toBe('checking'));
+    expect(s.profile().teaching?.topics.safety).toBeUndefined();
+    expect(s.profile().themes.hanging_piece.teachCount).toBe(1);
+  });
+
   it('opening the options counts as a miss', async () => {
     const start: ProfileData = { ...defaultProfile(), teaching: { gamesFinished: 3, topics: {} } };
     const s = await setup({ profile: start, coach: teachCoach({ topic: 'safety', mode: 'guide' }) });
@@ -289,6 +310,66 @@ describe('useGame: teaching games', () => {
     act(() => s.actions().closeWatch());
     expect(s.view().watching).toBeNull();
     expect(s.view().phase).toBe('user');
+  });
+
+  describe('a new game started while the finished one is still ending', () => {
+    const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    const withLosses = async (db: Db) => { for (let i = 0; i < 5; i++) await db.saveGame(lostGame(i)); };
+    const soloProfile = () => {
+      const p = defaultProfile();
+      p.levels = { opening: 'solo', middlegame: 'solo', endgame: 'solo' };
+      return p;
+    };
+
+    it('New game right after a teaching game ends: still a teaching game end', async () => {
+      const start = soloProfile();
+      const snapshot = structuredClone(start);
+      const s = await setup({ profile: start, prepare: withLosses });
+      await waitFor(() => expect(s.view().phase).toBe('setup'));
+      act(() => s.actions().start('w', 'teach'));
+      await userTurn(s);
+      act(() => { s.actions().resign(); s.actions().newGame(); });
+      await settle();
+      expect(s.view().phase).toBe('setup');
+      expect(s.view().recap).toBeNull();
+      expect(s.onSettings).not.toHaveBeenCalled();
+      expect(s.coach.recap).not.toHaveBeenCalled();
+      expect(s.profile().levels).toEqual(snapshot.levels);
+      expect(s.profile().moves).toEqual(snapshot.moves);
+      expect(s.profile().teaching?.gamesFinished).toBe(1);
+    });
+
+    it('a play game started right after a teaching game ends gets no teaching recap', async () => {
+      const s = await setup({ prepare: withLosses });
+      await waitFor(() => expect(s.view().phase).toBe('setup'));
+      act(() => s.actions().start('w', 'teach'));
+      await userTurn(s);
+      act(() => { s.actions().resign(); s.actions().start('w', 'play'); });
+      await waitFor(() => expect(s.view().phase).toBe('user'));
+      await settle();
+      expect(s.view().mode).toBe('play');
+      expect(s.view().recap).toBeNull();
+      expect(s.onSettings).not.toHaveBeenCalled();
+      expect(s.profile().teaching?.gamesFinished).toBe(1);
+    });
+
+    it('a teaching game started right after a play game ends: the play game is still assessed', async () => {
+      const coach = teachCoach();
+      const s = await setup({ coach, prepare: withLosses, settings: { ...DEFAULT_SETTINGS, opponentRating: 600 } });
+      await waitFor(() => expect(s.view().phase).toBe('setup'));
+      act(() => s.actions().start('w'));
+      await waitFor(() => expect(s.view().phase).toBe('user'));
+      act(() => { s.actions().resign(); s.actions().start('w', 'teach'); });
+      await waitFor(() => expect(s.onSettings).toHaveBeenCalled());
+      expect((s.onSettings.mock.calls.at(-1)![0] as Settings).opponentRating).toBeLessThan(600);
+      expect(coach.recap).toHaveBeenCalled();
+      expect(coach.teachRecap).not.toHaveBeenCalled();
+      await userTurn(s);
+      await settle();
+      expect(s.view().mode).toBe('teach');
+      expect(s.view().recap).toBeNull();
+      expect(s.profile().teaching?.gamesFinished ?? 0).toBe(0);
+    });
   });
 
   it('a play game after a teaching game still records moves', async () => {
