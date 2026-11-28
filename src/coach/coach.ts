@@ -14,7 +14,7 @@ import type { PieceRef } from './facts';
 import { THEME_LESSONS, THEME_WHY, mistakeTemplate } from './templates';
 import type { Explanation, MistakeContext } from './templates';
 import { planText, preMoveCoaching } from './questions';
-import { revealsMove } from './leaks';
+import { moveLeaks, revealsMove } from './leaks';
 import type { QuestionContext } from './questions';
 import { postMoveTemplate, revealTemplate, topMoveKind } from './postMove';
 import type { PostMoveContext, RevealContext, TopKind } from './postMove';
@@ -22,7 +22,7 @@ import { watchLine } from './watch';
 import type { WatchPly } from './watch';
 import { deriveReasons, reasonText } from './reasons';
 import type { Reasons } from './reasons';
-import { buildPacket, buildRevealPacket } from './claude';
+import { buildPacket, buildRevealPacket, buildTeachPacket } from './claude';
 import type { FactPacket } from './claude';
 import { teachOptions } from '../teach/options';
 import type { TeachOption } from '../teach/options';
@@ -178,6 +178,7 @@ interface Mistake {
   /** The reveal of the better move, once built; showMe and playOnReveal return it again. */
   revealed?: { message: CoachMessage };
 }
+interface Turn { message: CoachMessage; fen: string; lastMove: PlayedMove | null }
 interface Tracker { mistake: Mistake; opponentSans: string[]; gain: number; balanceAtMistake: number }
 
 export class Coach {
@@ -192,7 +193,7 @@ export class Coach {
   private tracker: Tracker | null = null;
   private mode: GameMode = 'play';
   /** The latest teach message, its position and the move it followed, until the next user move or cancel. */
-  private turn: { message: CoachMessage; fen: string; lastMove: PlayedMove | null } | null = null;
+  private turn: Turn | null = null;
 
   constructor(private deps: CoachDeps) {}
 
@@ -251,7 +252,9 @@ export class Coach {
         teach: { topic, mode, position, options: choice.options, optionsOpen, inBook: choice.inBook },
       };
       this.currentId = message.id;
-      this.turn = { message, fen, lastMove };
+      const turn: Turn = { message, fen, lastMove };
+      this.turn = turn;
+      if (choice.options.length > 0) this.rewordTurn(turn, userColor);
       return message;
     } catch {
       return null;
@@ -270,6 +273,25 @@ export class Coach {
     };
     turn.message = message;
     return message;
+  }
+
+  /**
+   * Claude may reword the position text only (option reasons stay the checked text). With the options
+   * closed it must name no move and no square of a piece the user could win. Dropped once the user
+   * moves, takes back or opens the options.
+   */
+  private rewordTurn(turn: Turn, userColor: Color): void {
+    const { message, fen } = turn;
+    const teach = message.teach!;
+    const winnable = positionFacts(fen).hanging.filter((h) => h.color !== userColor).map((h) => new RegExp(`\\b${h.square}\\b`, 'i'));
+    const safe = (t: string) => moveLeaks(t).length === 0 && !winnable.some((re) => re.test(t));
+    this.publish(message, () => buildTeachPacket({ fen, position: teach.position, options: teach.options, optionsOpen: teach.optionsOpen }, this.deps.profile()),
+      () => this.turn === turn && turn.message === message, {
+        accept: (e) => teach.optionsOpen || safe(e.whatHappened),
+        fields: (e) => ({ whatHappened: e.whatHappened }),
+        patch: (e) => ({ teach: { ...teach, position: e.whatHappened } }),
+        onUpgrade: (upgraded) => { turn.message = upgraded; },
+      });
   }
 
   /**
@@ -637,16 +659,18 @@ export class Coach {
       accept?: (e: Explanation) => boolean;
       /** The fields kept from the merged explanation. */
       fields?: (e: Explanation) => Explanation;
+      /** Other fields of the message that follow the new explanation. */
+      patch?: (e: Explanation) => Partial<CoachMessage>;
     } = {},
   ): void {
-    const { onUpgrade, accept = () => true, fields = (e: Explanation) => e } = opts;
+    const { onUpgrade, accept = () => true, fields = (e: Explanation) => e, patch } = opts;
     const epoch = this.epoch;
     Promise.resolve()
       .then(() => this.deps.explain(packet()))
       .then((better) => {
         if (!better || epoch !== this.epoch || !isCurrent() || !accept(better)) return;
         const explanation = fields({ ...message.explanation, ...better });
-        const upgraded: CoachMessage = { ...message, explanation, source: 'claude' };
+        const upgraded: CoachMessage = { ...message, ...patch?.(explanation), explanation, source: 'claude' };
         onUpgrade?.(upgraded);
         this.emit(upgraded);
       })

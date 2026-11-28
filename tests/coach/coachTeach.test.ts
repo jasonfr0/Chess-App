@@ -7,6 +7,7 @@ import type { Engine } from '../../src/engine/engine';
 import { GameState } from '../../src/game/gameState';
 import type { Analysis, EngineLine, TeachMode } from '../../src/types';
 import type { Explanation } from '../../src/coach/templates';
+import type { FactPacket } from '../../src/coach/claude';
 
 const line = (uci: string[], cp: number | null, mate: number | null = null): EngineLine => ({ uci, cp, mate });
 
@@ -258,5 +259,115 @@ describe('Coach.teachRecap', () => {
     expect(m.explanation.better).toBe("Winning material: I'll go back to showing moves for a while.");
     expect(m.explanation.lesson).toMatch(/^Habit to work on: /);
     expect(coach.teachRecap([], ['other'], []).explanation.better).toBeUndefined();
+  });
+});
+
+describe("Claude's wording of the teaching turn", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  function withExplain(mode: TeachMode, explain: CoachDeps['explain']) {
+    const calls: FactPacket[] = [];
+    const setup = teachSetup(mode, { over: { explain: (p) => { calls.push(p); return explain(p); } } });
+    const updates: CoachMessage[] = [];
+    setup.coach.onUpdate((m) => updates.push(m));
+    return { ...setup, updates, calls };
+  }
+  /** An explain answer the test releases by hand. */
+  function gate(answer: Explanation) {
+    let release = () => {};
+    const ready = new Promise<void>((r) => { release = r; });
+    return { explain: () => ready.then(() => answer), release };
+  }
+
+  it("Claude's wording replaces the position text", async () => {
+    const text = 'Both sides have brought a knight out. Your move.';
+    const { game, coach, updates, calls } = withExplain('show', () => Promise.resolve({ whatHappened: text, lesson: 'Extra.' }));
+    const m = (await coach.teachTurn(game))!;
+    expect(m.source).toBe('template');
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].kind).toBe('teach');
+    expect(calls[0].allowedMoves).toEqual(m.teach!.options.map((o) => o.san));
+    expect(updates).toHaveLength(1);
+    const up = updates[0];
+    expect(up.id).toBe(m.id);
+    expect(up.source).toBe('claude');
+    expect(up.explanation).toEqual({ whatHappened: text });
+    expect(up.teach).toEqual({ ...m.teach, position: text });
+    expect(up.arrows).toEqual(m.arrows);
+    expect(up.questions).toEqual(m.questions);
+  });
+
+  it('a guide-mode rewrite that names a move is rejected', async () => {
+    for (const whatHappened of ['Your knight came out with Nf3.', 'Think about pushing a pawn to d4.']) {
+      const { game, coach, updates, calls } = withExplain('guide', () => Promise.resolve({ whatHappened }));
+      await coach.teachTurn(game);
+      await flush();
+      expect(calls[0].allowedMoves).toEqual([]);
+      expect(updates).toEqual([]);
+    }
+  });
+
+  it('a guide-mode rewrite that points at a piece they can win is rejected', async () => {
+    const fen = '4k3/8/8/6n1/8/5N2/8/R3K3 w - - 0 1';
+    const updates: CoachMessage[] = [];
+    const coach = new Coach(makeDeps(new FakeEngine({ [fen]: [line(['f3g5', 'e8e7'], 300)] }), {
+      teachModeFor: () => 'guide', explain: () => Promise.resolve({ whatHappened: 'Their knight on g5 is not guarded.' }),
+    }));
+    coach.onUpdate((m) => updates.push(m));
+    coach.setMode('teach');
+    const m = (await coach.teachTurn(new GameState('w', fen)))!;
+    expect(m.teach?.optionsOpen).toBe(false);
+    await flush();
+    expect(updates).toEqual([]);
+  });
+
+  it('a clean guide-mode rewrite is used, and kept when the options open', async () => {
+    const text = 'Both sides have brought a knight out.';
+    const { game, coach, updates } = withExplain('guide', () => Promise.resolve({ whatHappened: text }));
+    const m = (await coach.teachTurn(game))!;
+    await flush();
+    expect(updates.map((u) => u.teach?.position)).toEqual([text]);
+    const open = coach.openOptions(m.id)!;
+    expect(open.teach?.position).toBe(text);
+    expect(open.teach?.optionsOpen).toBe(true);
+    expect(open.source).toBe('claude');
+  });
+
+  it('no key / explainer returns null keeps the template', async () => {
+    const { game, coach, updates, calls } = withExplain('show', () => Promise.resolve(null));
+    const m = (await coach.teachTurn(game))!;
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(updates).toEqual([]);
+    expect(m.source).toBe('template');
+  });
+
+  it('an engine-failure turn is not sent to Claude', async () => {
+    const calls: FactPacket[] = [];
+    const { game, coach } = teachSetup('show', { reject: true, over: { explain: (p) => { calls.push(p); return Promise.resolve(null); } } });
+    expect((await coach.teachTurn(game))?.teach?.options).toEqual([]);
+    await flush();
+    expect(calls).toEqual([]);
+  });
+
+  it('a rewrite arriving after the options open is not applied', async () => {
+    const g = gate({ whatHappened: 'Both sides have brought a knight out.' });
+    const { game, coach, updates } = withExplain('guide', g.explain);
+    const m = (await coach.teachTurn(game))!;
+    const open = coach.openOptions(m.id)!;
+    g.release();
+    await flush();
+    expect(updates).toEqual([]);
+    expect(coach.openOptions(m.id)?.teach?.position).toBe(open.teach?.position);
+  });
+
+  it('a rewrite arriving after the user moved is not applied', async () => {
+    const g = gate({ whatHappened: 'Both sides have brought a knight out.' });
+    const { game, coach, updates } = withExplain('show', g.explain);
+    await coach.teachTurn(game);
+    await coach.onUserMove(game, game.play('d2d4'));
+    g.release();
+    await flush();
+    expect(updates.filter((u) => u.kind === 'teach')).toEqual([]);
   });
 });

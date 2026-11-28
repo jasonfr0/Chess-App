@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Chess } from 'chess.js';
-import { buildPacket, buildRevealPacket, createExplainer, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
+import { buildPacket, buildRevealPacket, buildTeachPacket, createExplainer, explainWithClaude, validateClaims, validateExplanation } from '../../src/coach/claude';
 import type { ClaudeClientLike, FactPacket } from '../../src/coach/claude';
 import type { Explanation, MistakeContext } from '../../src/coach/templates';
 import { mistakeTemplate } from '../../src/coach/templates';
@@ -449,5 +449,52 @@ describe('buildRevealPacket hanging pieces', () => {
     const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
     await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
     expect(reqs[0].system[0].text).toContain('For a reveal there is no "fenAfter": "hanging" lists their pieces that can be won in "fen".');
+  });
+});
+
+describe('buildTeachPacket', () => {
+  // White to move: White's knight on f3 can take the undefended knight on g5, which attacks it back.
+  const fen = '4k3/8/8/6n1/8/5N2/8/R3K3 w - - 0 1';
+  const options = [{ san: 'Nxg5', reason: 'Nxg5 takes a knight for free.' }, { san: 'Ra3', reason: 'Ra3 brings your rook out.' }];
+  const position = 'Look at every piece of theirs you could take, and check whether it is guarded.';
+
+  it('allows only the shown options', () => {
+    const open = buildTeachPacket({ fen, position, options, optionsOpen: true }, profile);
+    expect(open.kind).toBe('teach');
+    expect(open.allowedMoves).toEqual(['Nxg5', 'Ra3']);
+    expect(open.template).toEqual({ whatHappened: position });
+    expect(open.facts).toEqual({ optionsOpen: true, options });
+    const closed = buildTeachPacket({ fen, position, options, optionsOpen: false }, profile);
+    expect(closed.allowedMoves).toEqual([]);
+    expect(closed.facts).toEqual({ optionsOpen: false });
+    expect(JSON.stringify(closed)).not.toMatch(/Nxg5|Ra3/);
+  });
+
+  it('while options are closed, lists only hanging pieces of the side to move', () => {
+    const all = positionFacts(fen).hanging;
+    expect(all.map((h) => [h.square, h.color]).sort()).toEqual([['f3', 'w'], ['g5', 'b']]);
+    expect(buildTeachPacket({ fen, position, options, optionsOpen: true }, profile).hanging).toEqual(all);
+    const closed = buildTeachPacket({ fen, position, options, optionsOpen: false }, profile);
+    expect(closed.hanging).toEqual(all.filter((h) => h.color === 'w'));
+    expect(validateClaims({ whatHappened: 'Your knight on f3 is hanging.' }, closed)).toBe(true);
+    expect(validateClaims({ whatHappened: 'Their knight on g5 is hanging.' }, closed)).toBe(false);
+  });
+
+  it('a rewrite with jargon is rejected', async () => {
+    const p = buildTeachPacket({ fen, position, options, optionsOpen: true }, profile);
+    const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: `Nxg5 gains a ${BANNED_TERMS[1]}.` } });
+    expect(await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('a closed-options rewrite naming a move is rejected', async () => {
+    const p = buildTeachPacket({ fen, position, options, optionsOpen: false }, profile);
+    const { client } = fake({ stop_reason: 'end_turn', parsed_output: { whatHappened: 'Nxg5 is strong here.' } });
+    expect(await explainWithClaude(p, { client, model: 'claude-sonnet-5-5' })).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('tells Claude what a teach packet is', async () => {
+    const { client, reqs } = fake({ stop_reason: 'end_turn', parsed_output: good });
+    await explainWithClaude(packet, { client, model: 'claude-sonnet-5-5' });
+    expect(reqs[0].system[0].text).toContain('For kind "teach"');
   });
 });

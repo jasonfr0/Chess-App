@@ -14,7 +14,7 @@ export const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-
 export type ModelId = (typeof MODEL_IDS)[number];
 
 export interface FactPacket {
-  kind: 'post_move' | 'mistake';
+  kind: 'post_move' | 'mistake' | 'teach';
   /** The position before the user's move. */
   fen: string;
   /** The position after the user's move. */
@@ -186,6 +186,27 @@ export function buildRevealPacket(ctx: RevealContext, t: Explanation, p: Profile
   };
 }
 
+/**
+ * The packet for a teaching turn's position text: only `whatHappened` is reworded. While the options
+ * are closed (guide mode) no move may be named, and only the side to move's own pieces are listed as
+ * hanging, so Claude cannot point at a piece the user could win.
+ */
+export function buildTeachPacket(
+  input: { fen: string; position: string; options: { san: string; reason: string }[]; optionsOpen: boolean },
+  p: ProfileSummary,
+): FactPacket {
+  const { fen, position, options, optionsOpen } = input;
+  const toMove = fen.split(' ')[1];
+  const hanging = positionFacts(fen).hanging;
+  return {
+    kind: 'teach', fen, sanHistory: [],
+    hanging: optionsOpen ? hanging : hanging.filter((h) => h.color === toMove),
+    allowedMoves: optionsOpen ? options.map((o) => o.san) : [],
+    facts: optionsOpen ? { optionsOpen, options: options.map(({ san, reason }) => ({ san, reason })) } : { optionsOpen },
+    template: { whatHappened: position }, profile: p,
+  };
+}
+
 const explanationSchema = z.object({
   whatHappened: z.string(),
   better: z.string().optional(),
@@ -202,6 +223,7 @@ Explain only the given reasons:
 - For kind "post_move": explain why the played move works (playedMoveIs "top" or "book") or why the stronger move is better than the played one ("not_top").
 - When facts.reveal is true, the user asked to see the better move: explain only why bestMove is good, from "bestReasons". For a reveal there is no "fenAfter": "hanging" lists their pieces that can be won in "fen".
 - For kind "mistake": never name or hint at a better move. The user may take the move back and look for it themselves.
+- For kind "teach": it is the user's turn and the template describes the position in "fen". Rewrite only "whatHappened"; the options and their reasons are shown separately. There is no "fenAfter": "hanging" lists pieces that can be won in "fen". When facts.optionsOpen is false, never name or hint at any move or any piece they could win.
 
 Truth rule (strict):
 - Mention only moves listed in allowedMoves. Never calculate new lines or invent variations, and never contradict the facts.
