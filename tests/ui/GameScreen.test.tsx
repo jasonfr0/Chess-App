@@ -1100,6 +1100,97 @@ describe('GameScreen board decorations', () => {
   });
 });
 
+describe('GameScreen: Play to learn', () => {
+  const TEACH_LABEL = "Teaching game · doesn't count toward your level";
+  const option = { uci: 'e2e4', san: 'e4', reason: 'It takes the centre.', watch: null };
+  const guideTurn = (): CoachMessage => ({
+    id: 'teach-1', kind: 'teach', source: 'template', arrows: [], explanation: { whatHappened: 'The position.' },
+    theirMove: null, questions: ['What does their last move attack?'],
+    teach: { topic: 'opening', mode: 'guide', position: 'The position.', options: [option], optionsOpen: false, inBook: false },
+  });
+  function teachingCoach() {
+    const coach = fakeCoach();
+    coach.teachTurn = vi.fn(async () => guideTurn());
+    coach.openOptions = vi.fn((): CoachMessage => {
+      const m = guideTurn();
+      return { ...m, arrows: [{ from: 'e2', to: 'e4', color: 'green' }], teach: { ...m.teach!, optionsOpen: true } };
+    });
+    return coach;
+  }
+
+  it('choosing Play to learn starts a teaching game', async () => {
+    const coach = teachingCoach();
+    await setup(undefined, { coach });
+    const group = await screen.findByRole('radiogroup', { name: 'Game type' });
+    expect(within(group).getByRole('radio', { name: 'Play' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText("The coach shows you good moves before you play. These games don't count toward your level.")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole('radio', { name: 'Play to learn' }));
+    expect(within(group).getByRole('radio', { name: 'Play to learn' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'White' }));
+    expect(await screen.findByText(TEACH_LABEL)).toBeInTheDocument();
+    await waitFor(() => expect(coach.teachTurn).toHaveBeenCalled());
+    expect(coach.preMove).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Show me options' })).toBeInTheDocument();
+  });
+
+  it('default start is a play game', async () => {
+    const coach = teachingCoach();
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    await waitFor(() => expect(coach.preMove).toHaveBeenCalled());
+    expect(coach.teachTurn).not.toHaveBeenCalled();
+    expect(screen.queryByText(TEACH_LABEL)).not.toBeInTheDocument();
+  });
+
+  it('green option arrows only while options are open', async () => {
+    const coach = teachingCoach();
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('radio', { name: 'Play to learn' }));
+    fireEvent.click(screen.getByRole('button', { name: 'White' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show me options' }));
+    expect(boardEl().getAttribute('data-arrows')).toBe('green');
+    expect(screen.getByRole('heading', { name: 'Good options' })).toBeInTheDocument();
+    // Before opening there was no arrow: check by starting a fresh game in guide mode.
+    cleanup();
+    await setup(undefined, { coach: teachingCoach() });
+    fireEvent.click(await screen.findByRole('radio', { name: 'Play to learn' }));
+    fireEvent.click(screen.getByRole('button', { name: 'White' }));
+    await screen.findByRole('button', { name: 'Show me options' });
+    expect(boardEl().getAttribute('data-arrows')).toBe('');
+  });
+
+  it('watching an option goes "Back to the options"', async () => {
+    const coach = fakeCoach();
+    const watch = plies(START, ['e2e4', 'e7e5']).map((p, i) => ({ ...p, by: i % 2 === 0 ? 'user' as const : 'opponent' as const }));
+    coach.teachTurn = vi.fn(async (): Promise<CoachMessage> => {
+      const m = guideTurn();
+      return { ...m, teach: { ...m.teach!, mode: 'show', optionsOpen: true, options: [{ ...option, watch }] } };
+    });
+    await setup(undefined, { coach });
+    fireEvent.click(await screen.findByRole('radio', { name: 'Play to learn' }));
+    fireEvent.click(screen.getByRole('button', { name: 'White' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Watch option 1' }));
+    expect(screen.getByRole('region', { name: 'Watch what happens' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Coach' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the options' }));
+    expect(screen.getByRole('heading', { name: 'Good options' })).toBeInTheDocument();
+  });
+
+  it('a teaching game ends with the recap titled "Teaching game"', async () => {
+    const coach = teachingCoach();
+    await setup('r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', { coach });
+    fireEvent.click(await screen.findByRole('radio', { name: 'Play to learn' }));
+    fireEvent.click(screen.getByRole('button', { name: 'White' }));
+    await waitFor(() => expect(board.options?.allowDragging).toBe(true));
+    drop('h5', 'f7');
+    const recap = await screen.findByRole('region', { name: /game over/i });
+    expect(within(recap).getByRole('heading', { name: 'Teaching game' })).toBeInTheDocument();
+    expect(coach.teachRecap).toHaveBeenCalled();
+    expect(coach.recap).not.toHaveBeenCalled();
+  });
+});
+
 describe('App', () => {
   it('resets a v1 profile once, shows the notice until dismissed, and not again after a reload', async () => {
     const db = await openDb();

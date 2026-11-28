@@ -10,8 +10,9 @@ interface Props {
 }
 
 /**
- * Shown when the user's move is flagged; the game is paused until they choose. It never names the
- * better move: that waits for Show me (after a take-back) or the reveal after Play on.
+ * Shown when the user's move is flagged; the game is paused until they choose. In Play it never names
+ * the better move: that waits for Show me (after a take-back) or the reveal after Play on. A teaching
+ * game's card comes with the reveal attached (`reveal`), so the better move is shown on it at once.
  */
 export function MistakeCard({ message, onTakeBack, onPlayOn, onWatch }: Props) {
   const recId = useId();
@@ -26,6 +27,12 @@ export function MistakeCard({ message, onTakeBack, onPlayOn, onWatch }: Props) {
         <h3>What happened</h3>
         <p>{explanation.whatHappened}</p>
       </div>
+      {message.reveal && explanation.better && (
+        <div className="section">
+          <h3>Better move</h3>
+          <p>{explanation.better}</p>
+        </div>
+      )}
       {explanation.lesson && (
         <div className="section">
           <h3>The lesson</h3>

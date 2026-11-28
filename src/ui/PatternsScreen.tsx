@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { THEME_LESSONS } from '../coach/templates';
-import type { ProfileData, Theme } from '../types';
+import type { ProfileData, Theme, ThemeStat } from '../types';
 
 const TOP = 5;
 
 interface Props { profile: ProfileData }
+
+type Example = ThemeStat['examples'][number];
+
+const learned = (s: ThemeStat) => s.teachCount ?? 0;
+
+/** "×3"; with flagged moves from teaching games, "×3 in games · 2 while learning". */
+function countText(s: ThemeStat): string {
+  return learned(s) > 0 ? `×${s.count} in games · ${learned(s)} while learning` : `×${s.count}`;
+}
 
 export function PatternsScreen({ profile }: Props) {
   const [fen, setFen] = useState<string | null>(null);
@@ -15,9 +24,21 @@ export function PatternsScreen({ profile }: Props) {
     if (fen) exampleRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   }, [fen]);
   const themes = (Object.entries(profile.themes) as [Theme, ProfileData['themes'][Theme]][])
-    .filter(([, s]) => s.count > 0)
-    .sort((a, b) => b[1].count - a[1].count)
+    .filter(([, s]) => s.count > 0 || learned(s) > 0)
+    .sort((a, b) => b[1].count - a[1].count || learned(b[1]) - learned(a[1]))
     .slice(0, TOP);
+
+  const examples = (list: Example[]) => (
+    <ul className="examples">
+      {[...list].reverse().map((ex, i) => (
+        <li key={`${ex.gameId}-${ex.ply}-${i}`}>
+          <button type="button" className="link" onClick={() => setFen(ex.fen)}>
+            Position from move {Math.floor(ex.ply / 2) + 1}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
 
   return (
     <div className="screen patterns">
@@ -43,18 +64,14 @@ export function PatternsScreen({ profile }: Props) {
       )}
       {themes.map(([theme, stat]) => (
         <section className="card" key={theme}>
-          <h2>{THEME_LESSONS[theme].title} <span className="count">×{stat.count}</span></h2>
+          <h2>{THEME_LESSONS[theme].title} <span className="count">{countText(stat)}</span></h2>
           <p>{THEME_LESSONS[theme].habit}</p>
-          {stat.examples.length > 0 && (
-            <ul className="examples">
-              {[...stat.examples].reverse().map((ex, i) => (
-                <li key={`${ex.gameId}-${ex.ply}-${i}`}>
-                  <button type="button" className="link" onClick={() => setFen(ex.fen)}>
-                    Position from move {Math.floor(ex.ply / 2) + 1}
-                  </button>
-                </li>
-              ))}
-            </ul>
+          {stat.examples.length > 0 && examples(stat.examples)}
+          {(stat.teachExamples ?? []).length > 0 && (
+            <>
+              <h3>While learning</h3>
+              {examples(stat.teachExamples!)}
+            </>
           )}
         </section>
       ))}

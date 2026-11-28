@@ -119,6 +119,21 @@ label { font-weight: 600; display: block; }
 .hint-buttons { display: flex; gap: 6px; }
 .hint-buttons button { flex: 1; }
 
+.teach-label {
+  margin: 0 0 4px; padding: 3px 10px; text-align: center; font-size: 13px; font-weight: 600;
+  background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px;
+}
+.game-type { display: flex; gap: 8px; }
+.game-type button { flex: 1 1 0; }
+.game-type button.selected { border: 2px solid var(--accent); font-weight: 700; box-shadow: inset 0 0 0 1px var(--accent); }
+.setup .game-type + .muted { margin: 6px 0 12px; }
+.teach-panel .options { margin: 4px 0 6px; padding-left: 22px; }
+.teach-panel .options li { margin: 6px 0; }
+.teach-panel .option { display: flex; align-items: flex-start; gap: 8px; }
+.teach-panel .option-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.teach-panel .options li::marker { font-weight: 700; }
+.teach-panel .options button { flex: 0 0 auto; min-height: 36px; padding: 6px 12px; }
+
 .mistake { border: 2px solid var(--bad); }
 .mistake h2 { color: var(--bad); }
 .badge {

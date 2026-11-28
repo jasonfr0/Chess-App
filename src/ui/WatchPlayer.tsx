@@ -5,10 +5,12 @@ interface Props {
   index: number;
   onStep: (delta: -1 | 1) => void;
   onClose: () => void;
+  /** The close button's text: the mistake card's line goes "Back to the card" (default). */
+  closeLabel?: string;
 }
 
-/** Steps through the mistake's consequence line on a read-only board; the live game is untouched. */
-export function WatchPlayer({ plies, index, onStep, onClose }: Props) {
+/** Steps through a line (the mistake's consequence, or a teaching option's) on a read-only board; the live game is untouched. */
+export function WatchPlayer({ plies, index, onStep, onClose, closeLabel = 'Back to the card' }: Props) {
   const ply = plies[index];
   return (
     <section className="card watch" aria-label="Watch what happens">
@@ -22,7 +24,7 @@ export function WatchPlayer({ plies, index, onStep, onClose }: Props) {
         <button type="button" aria-label="Next move in line" disabled={index >= plies.length - 1} onClick={() => onStep(1)}>▶</button>
       </div>
       <div className="actions">
-        <button type="button" className="primary" onClick={onClose}>Back to the card</button>
+        <button type="button" className="primary" onClick={onClose}>{closeLabel}</button>
       </div>
     </section>
   );
