@@ -151,13 +151,19 @@ Each turn has one **topic**, taken from the main checked reason for the best mov
 
 Each topic has a mode, **show** or **guide**, stored in the profile:
 
-- Every topic starts in *show* except **endgame**, which starts in *guide* (the user's strength).
+- **No fading at first (user's decision).** For the first 3 finished teaching games (constant;
+  "first few" is the user's wording, 3 is the builder's call) every topic is in *show* and nothing
+  is counted toward the fade. The rules below start with the fourth game.
+- **The opening topic never fades (user's decision).** Positions in the repertoire are always in
+  *show*. Piece 2's opening games will follow the same rule.
+- Once fading has started, every topic begins in *show* except **endgame**, which begins in *guide*
+  (the user's strength).
 - After 5 shown turns on a topic, it switches to *guide* as a trial.
 - In *guide*, a turn is a **success** if the user plays a non-flagged move without opening the
   options. It is a **miss** if the move is flagged, or the options were opened.
 - Two misses within the last four guide turns of a topic send it back to *show*; after 3 more
   shown turns it tries *guide* again.
-- "other" always stays in *show*.
+- "other" and "opening" always stay in *show*.
 
 Each position counts once, by the user's first attempt. After a take-back, the retry changes
 neither the shown-turn count nor the success/miss record. The taken-back mistake still adds to the
@@ -199,7 +205,8 @@ levels and neither affects the other.
 ## Testing
 
 - Unit: option selection (repertoire, engine margin, mate, missing reasons), topic choice, fade
-  rules (trial, success, miss, fall back, endgame start, "other").
+  rules (trial, success, miss, fall back, endgame start, "other", no fading in the first 3 games,
+  opening never fades).
 - Isolation: after a full teaching game, `profile.moves`, levels, opponent rating and Play theme
   counts are unchanged; teaching theme counts and topic state did change.
 - Play levels set to `solo` or overridden in Settings do not change what a teaching game flags or shows.
